@@ -1,0 +1,95 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+@layer base { body { @apply bg-[#f5f7f8] text-ink antialiased; font-family: 'DM Sans', sans-serif; } h1,h2,h3 { font-family: Manrope, sans-serif; } button,input,select,textarea { @apply outline-none; } }
+@layer components { .card { @apply rounded-2xl border border-[#e5ebee] bg-white shadow-[0_6px_30px_rgba(23,40,61,0.035)]; } .input { @apply w-full rounded-lg border border-[#dce4e8] bg-white px-3 py-2.5 text-sm text-ink focus:border-accent focus:ring-2 focus:ring-accent/10; } .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors disabled:opacity-50; } .btn-primary { @apply btn bg-accent text-white hover:bg-[#106865]; } .btn-secondary { @apply btn border border-[#dce4e8] bg-white text-ink hover:bg-[#f3f7f7]; } .btn-danger { @apply btn text-red-600 hover:bg-red-50; } .label { @apply mb-1.5 block text-xs font-bold uppercase tracking-wider text-[#718292]; } }
+
+body[data-workspace-role='tenant'] aside > div:first-child > div:first-child {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  place-items: center;
+  overflow: hidden;
+  padding: 0;
+  border-radius: 14px;
+  background-image: var(--workspace-icon-url, none);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+body[data-workspace-role='tenant'][data-workspace-icon='true'] aside > div:first-child > div:first-child svg { visibility: hidden; }
+body[data-workspace-role='tenant'] aside > div:first-child > span {
+  display: flex;
+  min-width: 0;
+  height: 42px;
+  flex: 1 1 auto;
+  align-items: center;
+  overflow: hidden;
+  max-width: 170px;
+  line-height: 1;
+  font-size: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body[data-workspace-role='tenant'] aside > div:first-child > span::after {
+  content: attr(data-workspace-name);
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  color: #17283d;
+  font-family: Manrope, sans-serif;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+}
+body[data-workspace-role='tenant'] header > div:first-child {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  font-size: 0;
+  line-height: 1;
+}
+body[data-workspace-role='tenant'] header > div:first-child::before {
+  content: attr(data-workspace-label);
+  display: inline-flex;
+  min-height: 16px;
+  align-items: center;
+  color: #9aabb4;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+body[data-modal-open] { overflow: hidden; }
+body[data-modal-open]::before {
+  content: '';
+  position: fixed;
+  z-index: 60;
+  inset: 0;
+  background: rgba(15, 31, 43, .46);
+  backdrop-filter: blur(3px);
+  animation: modal-backdrop-in .16s ease-out;
+}
+[data-floating-modal='true'] {
+  position: fixed !important;
+  z-index: 61;
+  top: 50%;
+  left: 50%;
+  width: min(720px, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  margin: 0 !important;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 24px 80px rgba(15, 31, 43, .22);
+  animation: modal-panel-in .16s ease-out;
+}
+[data-floating-modal='true'][data-modal-detail='true'] { width: min(960px, calc(100vw - 2rem)); }
+@keyframes modal-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-panel-in { from { opacity: 0; transform: translate(-50%, -48%); } to { opacity: 1; transform: translate(-50%, -50%); } }
+@media (prefers-reduced-motion: reduce) {
+  [data-floating-modal='true'], body[data-modal-open]::before { animation: none; }
+}

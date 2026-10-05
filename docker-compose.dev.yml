@@ -1,0 +1,30 @@
+services:
+  api:
+    build: ./backend
+    command: sh -c "python -m alembic upgrade head && exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    environment:
+      DATABASE_URL: sqlite:////data/ticketing.db
+      APP_SECRET: ${APP_SECRET:?Set APP_SECRET in .env (at least 32 characters)}
+      UPLOAD_DIR: /srv/uploads
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-26214400}
+    volumes:
+      - ./backend:/srv
+      - ticket_data:/data
+    ports:
+      - "${DEV_API_PORT:-8000}:8000"
+  web:
+    image: node:22-alpine
+    working_dir: /src
+    command: sh -c "npm ci && npm run dev"
+    environment:
+      VITE_PROXY_TARGET: http://api:8000
+    volumes:
+      - ./frontend:/src
+      - node_modules:/src/node_modules
+    ports:
+      - "${DEV_PORT:-5173}:5173"
+    depends_on:
+      - api
+volumes:
+  ticket_data:
+  node_modules:

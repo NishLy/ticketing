@@ -1,0 +1,50 @@
+{
+  "tenant": {"name": "StelinaCS", "slug": "stelinacs", "identifier_label": "Nama Perusahaan"},
+  "user": {"email": "stelinacs1@stelina.co.id", "role": "tenant"},
+  "steps": [
+    "Kendala PIB belum tersedia",
+    "Stok tidak sinkron antara pembelian dan penjualan",
+    "Skala usaha mikro pada OSS",
+    "Input Impor Manual Terkendala Data Komoditas Duplikat",
+    "PIB tidak muncul pada menu transaksi penjualan",
+    "Volume PIB muncul double"
+  ],
+  "fields": [
+    {"name": "NIB", "key": "nib", "type": "text"},
+    {"name": "No Aju", "key": "no_aju", "type": "text"},
+    {"name": "No PIB", "key": "no_pib", "type": "array"}
+  ],
+  "tickets": [
+    {"category": "Kendala PIB belum tersedia", "company": "PT Diamond Cold Storage", "nib": "8120008960533", "no_aju": "400009B0B0471", "no_pib": ["282210", "341296", "460069", "566628", "262943"]},
+    {"category": "Kendala PIB belum tersedia", "company": "PT SUNARKHO MEKAR JAYA ABADI", "nib": "8120207830991", "no_aju": "41000958F0CB5", "no_pib": ["024098"]},
+    {"category": "Kendala PIB belum tersedia", "company": "PT SELAT MALAKA FROZEN", "nib": "2708250087257", "no_aju": "410009B1B0833", "no_pib": ["027080", "028073"]},
+    {"category": "Kendala PIB belum tersedia", "company": "SUKANDA DJAYA", "nib": "8120107910232", "no_aju": "41000958FF6D9", "no_pib": ["566629"]},
+    {"category": "Kendala PIB belum tersedia", "company": "KENCANA LAUT NUSANTARA", "nib": "9120303490181", "no_aju": "400009B0B03C1", "no_pib": ["445056", "469610"]},
+    {"category": "Kendala PIB belum tersedia", "company": "PT.Bahagia Harmoni Indonesia", "nib": "8120002801796", "no_aju": "410009B1AE114", "no_pib": ["025858"]},
+    {"category": "Kendala PIB belum tersedia", "company": "PT. Mackessen Indonesia", "nib": "8120006872691", "no_aju": "410009590BA9F", "no_pib": ["553635"]},
+    {"category": "Kendala PIB belum tersedia", "company": "PT indoboga jaya Makmur", "nib": "8120303860223", "no_aju": "410009590E14A", "no_pib": ["236635", "283845"]},
+    {"category": "Kendala PIB belum tersedia", "company": "PT sumber aneka makanan", "nib": "8120214051495", "no_aju": "41000958F33AA", "no_pib": []},
+    {"category": "Kendala PIB belum tersedia", "company": "PT Andira Internusa Gemilang", "nib": "8120010021697", "no_aju": "4100095909307", "no_pib": ["552216"]},
+    {"category": "Kendala PIB belum tersedia", "company": "BAHARI PRIMA MANUNGGAL", "nib": "1281000682016", "no_aju": "41000958FA8B7", "no_pib": ["564833", "535539", "569226"]},
+    {"category": "Kendala PIB belum tersedia", "company": "FIRDALI SEJAHTERA", "nib": "8120001820471", "no_aju": "4100095904534", "no_pib": ["479961"]},
+    {"category": "Kendala PIB belum tersedia", "company": "PT. Sumber Gizi Internasional", "nib": "2002240339792", "no_aju": null, "no_pib": ["460379", "523290"]},
+    {"category": "Kendala PIB belum tersedia", "company": "Agung Mulia Chemindo", "nib": "8120100852783", "no_aju": "410009590BAC6", "no_pib": ["238811", "288496"]},
+    {"category": "Kendala PIB belum tersedia", "company": "AZELIS INDONESIA DISTRIBUSI", "nib": "8120001731663", "no_aju": "41000958E975F", "no_pib": []},
+    {"category": "Stok tidak sinkron antara pembelian dan penjualan", "company": "PT Bali Kulina Utama", "nib": "8120106961024", "no_aju": null, "no_pib": []},
+    {"category": "Stok tidak sinkron antara pembelian dan penjualan", "company": "CV Adi Jaya Mandiri", "nib": "8120005960155", "no_aju": null, "no_pib": []},
+    {"category": "Stok tidak sinkron antara pembelian dan penjualan", "company": "SUKANDA DJAYA", "nib": "8120107910232", "no_aju": null, "no_pib": []},
+    {"category": "Skala usaha mikro pada OSS", "company": "PT Combiphar", "nib": "8120008910649", "no_aju": null, "no_pib": []},
+    {"category": "Skala usaha mikro pada OSS", "company": "PT. Dwi Dasa Farmatama", "nib": "0602230055191", "no_aju": null, "no_pib": []},
+    {"category": "Skala usaha mikro pada OSS", "company": "Mina Sukses Sentosa", "nib": "9120602741711", "no_aju": null, "no_pib": []},
+    {"category": "Skala usaha mikro pada OSS", "company": "Anugerah Gim Jaya", "nib": "3009220008438", "no_aju": null, "no_pib": []},
+    {"category": "Skala usaha mikro pada OSS", "company": "Arta Mina Tama", "nib": "8120007862386", "no_aju": null, "no_pib": []},
+    {"category": "Skala usaha mikro pada OSS", "company": "Bumi Pangan Inti", "nib": "9120209161144", "no_aju": null, "no_pib": []},
+    {"category": "Skala usaha mikro pada OSS", "company": "Anugerah Fishery Indonesia", "nib": "1211240075731", "no_aju": null, "no_pib": []},
+    {"category": "Skala usaha mikro pada OSS", "company": "Asian Sea Trade", "nib": "2306230100179", "no_aju": null, "no_pib": []},
+    {"category": "Skala usaha mikro pada OSS", "company": "Oceanica Megah Utama", "nib": "8120212241415", "no_aju": null, "no_pib": []},
+    {"category": "Input Impor Manual Terkendala Data Komoditas Duplikat", "company": "PT. Ruangan Pendingin Indonesia", "nib": "8120307800816", "no_aju": null, "no_pib": []},
+    {"category": "PIB tidak muncul pada menu transaksi penjualan", "company": "PT Halim Sakti Pratama", "nib": "8120107772376", "no_aju": null, "no_pib": []},
+    {"category": "Volume PIB muncul double", "company": "MENARA BAHARI NUSANTARA", "nib": "0220302380243", "no_aju": null, "no_pib": []},
+    {"category": "Volume PIB muncul double", "company": "Indoguna Utama", "nib": "8120000821515", "no_aju": null, "no_pib": []}
+  ]
+}

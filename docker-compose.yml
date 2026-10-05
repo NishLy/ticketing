@@ -1,0 +1,41 @@
+services:
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/ticketing.db}
+      APP_SECRET: ${APP_SECRET:?Set APP_SECRET in .env (at least 32 characters)}
+      COOKIE_SECURE: ${COOKIE_SECURE:-0}
+      UPLOAD_DIR: /uploads
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-26214400}
+    volumes:
+      - ticket_data:/data
+      - upload_data:/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+    restart: unless-stopped
+  postgres:
+    image: postgres:17-alpine
+    profiles: [postgres]
+    environment:
+      POSTGRES_DB: ticketing
+      POSTGRES_USER: ticketing
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ticketing-local-only}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ticketing -d ticketing"]
+      interval: 5s
+      retries: 10
+  web:
+    build: ./frontend
+    ports:
+      - "${PORT:-8080}:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+volumes:
+  ticket_data:
+  postgres_data:
+  upload_data:
