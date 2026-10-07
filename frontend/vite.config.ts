@@ -26,6 +26,9 @@ export default defineConfig({
           }),
       },
     },
-    allowedHosts: ["boogieman-amicably-napped.ngrok-free.dev"],
+    allowedHosts: [
+      "boogieman-amicably-napped.ngrok-free.dev",
+      "waymark.nishly.xyz",
+    ],
   },
 });

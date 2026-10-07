@@ -14,24 +14,37 @@ import {
   displayFieldValue,
   errorText,
   FieldForm,
+  FilePreviewList,
   Heading,
+  issueStatusLabel,
   Notice,
   send,
   TicketTimeline,
   usePage,
 } from "./main";
-import type { Field, Step, Ticket } from "./main";
+import type { Field, Problem, Step, Ticket } from "./main";
 
 type Mode = "create" | "identity" | "fields" | "move";
+
+function isProblemValue(value: unknown): value is { problem_id: number; name: string; status: Problem["status"] } {
+  return !!value && typeof value === "object" && "problem_id" in value && "name" in value && "status" in value;
+}
+
+function hasImageFile(value: unknown) {
+  const files = Array.isArray(value) ? value : value && typeof value === "object" ? [value] : []
+  return files.some((file) => !!file && typeof file === "object" && "content_type" in file && String(file.content_type).startsWith("image/"))
+}
 
 export function TicketWorkspace({
   steps,
   fields,
+  problems,
   identifierLabel,
   updated,
 }: {
   steps: Step[];
   fields: Field[];
+  problems: Problem[];
   identifierLabel: string;
   updated: () => void;
 }) {
@@ -97,7 +110,7 @@ export function TicketWorkspace({
   function editFields() {
     if (!selected) return;
     setStepId(selected.step_id);
-    setValues(selected.values ?? {});
+    setValues(normalizeValues(selected.values ?? {}));
     setMode("fields");
   }
 
@@ -107,20 +120,28 @@ export function TicketWorkspace({
     setMode("move");
   }
 
+  function normalizeValues(source: Record<string, unknown>) {
+    return Object.fromEntries(Object.entries(source).map(([key, value]) => {
+      const field = fields.find(candidate => candidate.id === Number(key))
+      if (field?.type === "problem" && value && typeof value === "object" && "problem_id" in value) {
+        return [key, Number((value as { problem_id: number }).problem_id)]
+      }
+      return [key, value]
+    }))
+  }
+
   function chooseStep(id: number) {
     setStepId(id);
-    const allowed = new Set(
-      steps.find((s) => s.id === id)?.fields.map((b) => String(b.field_id)),
-    );
-    setValues(
-      mode === "move"
-        ? Object.fromEntries(
-            Object.entries(selected?.values ?? {}).filter(([key]) =>
-              allowed.has(key),
-            ),
-          )
-        : {},
-    );
+    const nextStep = steps.find((s) => s.id === id)
+    const allowed = new Set(nextStep?.fields.map((b) => String(b.field_id)))
+    const nextValues = mode === "move"
+      ? Object.fromEntries(Object.entries(normalizeValues(selected?.values ?? {})).filter(([key]) => allowed.has(key)))
+      : {}
+    const problemBinding = nextStep?.fields.find(binding => fields.find(field => field.id === binding.field_id)?.type === "problem")
+    if (problemBinding && selected?.problem && nextValues[String(problemBinding.field_id)] === undefined) {
+      nextValues[String(problemBinding.field_id)] = selected.problem.id
+    }
+    setValues(nextValues)
   }
 
   async function save(e: FormEvent) {
@@ -299,6 +320,9 @@ export function TicketWorkspace({
                 {selected.identifier}
               </p>
               <p className="mt-1 text-sm text-[#718292]">
+                Issue: {selected.problem ? <><b className="text-ink">{selected.problem.name}</b><span className={`ml-2 rounded-full px-2 py-0.5 text-[10px] font-bold ${selected.problem.status === "fixed" ? "bg-emerald-50 text-emerald-700" : selected.problem.status === "recurring" ? "bg-amber-50 text-amber-700" : "bg-[#eef4f5] text-[#5f7380]"}`}>{issueStatusLabel(selected.problem.status)}</span></> : "—"}
+              </p>
+              <p className="mt-1 text-sm text-[#718292]">
                 {steps.find((s) => s.id === selected.step_id)?.name ??
                   `Step #${selected.step_id}`}{" "}
                 · {selected.status} · opened {date(selected.created_at)}
@@ -341,22 +365,21 @@ export function TicketWorkspace({
           <h3 className="mb-3 mt-7 font-bold">Current step fields</h3>
           <div className="grid gap-3 md:grid-cols-2">
             {Object.entries(selected.values ?? {}).map(([key, value]) => (
-              <div key={key} className="rounded-lg bg-[#f7f9f9] p-3">
+              <div key={key} className={`rounded-lg p-3 ${hasImageFile(value) ? "" : "bg-[#f7f9f9]"}`}>
                 <span className="label">
                   {fields.find((f) => f.id === Number(key))?.name ?? key}
                 </span>
-                {value &&
-                typeof value === "object" &&
-                !Array.isArray(value) &&
-                "access_url" in value ? (
-                  <a
-                    className="text-sm font-semibold text-accent underline"
-                    href={String((value as { access_url: string }).access_url)}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {String((value as { name?: string }).name ?? "Open file")}
-                  </a>
+                {isProblemValue(value) ? (
+                  <div className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+                    <span>{value.name}</span>
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${value.status === "fixed" ? "bg-emerald-50 text-emerald-700" : value.status === "recurring" ? "bg-amber-50 text-amber-700" : "bg-[#eef4f5] text-[#5f7380]"}`}>
+                      {issueStatusLabel(value.status)}
+                    </span>
+                  </div>
+                ) : (value && typeof value === "object" && (Array.isArray(value)
+                  ? value.some((file) => !!file && typeof file === "object" && "access_url" in file)
+                  : "access_url" in value)) ? (
+                  <FilePreviewList value={value}/>
                 ) : (
                   <span className="text-sm font-semibold">
                     {displayFieldValue(value)}
@@ -472,6 +495,7 @@ export function TicketWorkspace({
                 fields={fields}
                 values={values}
                 setValues={setValues}
+                problems={problems}
               />
               <p className="text-xs text-[#718292]">
                 The ticket identifier stays at every step. Shared step fields
@@ -511,6 +535,10 @@ export function TicketWorkspace({
             render: (ticket) => (
               <span className="font-semibold">{ticket.identifier}</span>
             ),
+          },
+          {
+            title: "Issue",
+            render: (ticket) => ticket.problem ? <span className="font-semibold">{ticket.problem.name}<span className={`ml-2 rounded-full px-2 py-0.5 text-[10px] font-bold ${ticket.problem.status === "fixed" ? "bg-emerald-50 text-emerald-700" : ticket.problem.status === "recurring" ? "bg-amber-50 text-amber-700" : "bg-[#eef4f5] text-[#5f7380]"}`}>{issueStatusLabel(ticket.problem.status)}</span></span> : <span className="text-[#a1adb4]">—</span>,
           },
           {
             title: "Current step",

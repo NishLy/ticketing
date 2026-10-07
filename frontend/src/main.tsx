@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { LayoutDashboard, Building2, Users, Layers3, ListTodo, Ticket as TicketIcon, LogOut, Plus, Download, ArrowRight, X, Search, ChevronLeft, ChevronRight, Pencil, Trash2, CheckCircle2, Settings2 } from 'lucide-react'
+import { LayoutDashboard, Building2, Users, Layers3, ListTodo, Ticket as TicketIcon, LogOut, Plus, Download, ArrowRight, X, Search, ChevronLeft, ChevronRight, Pencil, Trash2, CheckCircle2, Settings2, Bug } from 'lucide-react'
 import { TicketWorkspace } from './TicketWorkspace'
 import { PlatformOverview, TenantOverview } from './Overview'
 import './index.css'
@@ -8,13 +8,17 @@ import './index.css'
 export type Base = { id: number; created_at: string; updated_at: string }
 type Tenant = Base & { name: string; slug: string; identifier_label: string; workspace_name?: string; workspace_icon_url?: string | null }
 type User = Base & { email: string; role?: string; tenant_id: number | null }
-export type Field = Base & { name: string; key: string; type: 'text' | 'number' | 'date' | 'boolean' | 'select' | 'array' | 'file'; options: string[] }
+export type Field = Base & { name: string; key: string; type: 'text' | 'number' | 'date' | 'boolean' | 'select' | 'array' | 'file' | 'problem'; options: string[] }
+export type ProblemAttachment = { file_id: number; name: string; size: number; content_type: string; access_url: string }
+export type Problem = Base & { name: string; description: string; status: 'identified' | 'progress_fixing' | 'fixed' | 'recurring' | 'reappeared'; files: ProblemAttachment[]; generated_step_id?: number | null }
+export type ProblemSummary = Pick<Problem, 'id' | 'name' | 'description' | 'status'>
 type Binding = { field_id: number; required: boolean }
 export type Step = Base & { name: string; description: string; fields: Binding[] }
-export type Event = Base & { kind: string; actor_id: number; actor_name?: string | null; from_step_id: number | null; to_step_id: number; snapshot: Record<string, unknown>; snapshot_fields?: Record<string, string>; from_step_name?: string | null; to_step_name?: string | null; identifier: string | null; title: string | null }
-export type Ticket = Base & { title: string; identifier: string; title_overridden: boolean; step_id: number; status: 'open' | 'closed'; closed_at: string | null; created_by: number; values?: Record<string, unknown>; events?: Event[] }
+export type Event = Base & { kind: string; actor_id: number; actor_name?: string | null; problem?: (ProblemSummary & { status_at_event: Problem['status'] | null }) | null; from_step_id: number | null; to_step_id: number; snapshot: Record<string, unknown>; snapshot_fields?: Record<string, string>; snapshot_problems?: Record<string, { name: string; status: Problem['status'] }>; from_step_name?: string | null; to_step_name?: string | null; identifier: string | null; title: string | null }
+export type Ticket = Base & { title: string; identifier: string; title_overridden: boolean; step_id: number; status: 'open' | 'closed'; closed_at: string | null; created_by: number; problem?: ProblemSummary | null; values?: Record<string, unknown>; events?: Event[] }
 export type Page<T> = { items: T[]; total: number }
 export type Column<T> = { title: string; render: (row: T) => React.ReactNode }
+export const issueStatusLabel = (status: Problem['status']) => ({ identified: 'Identified', progress_fixing: 'Progress fixing', fixed: 'Fixed', recurring: 'Recurring', reappeared: 'Recurring' })[status]
 
 export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch('/api' + path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...options })
@@ -186,7 +190,7 @@ function FloatingModalBehavior() {
   return null
 }
 
-type Section = 'overview' | 'tenants' | 'users' | 'tickets' | 'steps' | 'fields' | 'settings'
+type Section = 'overview' | 'tenants' | 'users' | 'tickets' | 'steps' | 'fields' | 'problems' | 'settings'
 function App() {
   const [user, setUser] = useState<User | null | undefined>(undefined)
   const [section, setSection] = useState<Section>('overview')
@@ -194,7 +198,7 @@ function App() {
   if (user === undefined) return <div className="p-10">Loading…</div>
   if (!user) return <Auth onLogin={u => { setUser(u); setSection('overview') }}/>
   const isAdmin = user.role === 'admin'
-  const nav: { id: Section; title: string; icon: React.ReactNode }[] = isAdmin ? [{ id: 'overview', title: 'Overview', icon: <LayoutDashboard size={18}/> }, { id: 'tenants', title: 'Tenants', icon: <Building2 size={18}/> }, { id: 'users', title: 'Tenant users', icon: <Users size={18}/> }] : [{ id: 'overview', title: 'Overview', icon: <LayoutDashboard size={18}/> }, { id: 'tickets', title: 'Tickets', icon: <TicketIcon size={18}/> }, { id: 'steps', title: 'Workflow steps', icon: <ListTodo size={18}/> }, { id: 'fields', title: 'Master fields', icon: <Layers3 size={18}/> }, { id: 'settings', title: 'Settings', icon: <Settings2 size={18}/> }]
+  const nav: { id: Section; title: string; icon: React.ReactNode }[] = isAdmin ? [{ id: 'overview', title: 'Overview', icon: <LayoutDashboard size={18}/> }, { id: 'tenants', title: 'Tenants', icon: <Building2 size={18}/> }, { id: 'users', title: 'Tenant users', icon: <Users size={18}/> }] : [{ id: 'overview', title: 'Overview', icon: <LayoutDashboard size={18}/> }, { id: 'tickets', title: 'Tickets', icon: <TicketIcon size={18}/> }, { id: 'steps', title: 'Workflow steps', icon: <ListTodo size={18}/> }, { id: 'fields', title: 'Master fields', icon: <Layers3 size={18}/> }, { id: 'problems', title: 'Issues', icon: <Bug size={18}/> }, { id: 'settings', title: 'Settings', icon: <Settings2 size={18}/> }]
   return <div className="min-h-screen lg:flex"><aside className="flex shrink-0 flex-col border-b border-[#e5ebee] bg-white lg:fixed lg:inset-y-0 lg:w-64 lg:border-b-0 lg:border-r"><div className="flex items-center gap-3 px-6 py-7"><div className="rounded-xl bg-accent p-2 text-white"><TicketIcon size={23}/></div><span className="font-[Manrope] text-xl font-extrabold tracking-tight">waymark<span className="text-accent">.</span></span></div><div className="px-5 pb-3 text-[10px] font-bold uppercase tracking-[.17em] text-[#9aaab2]">WORKSPACE</div><nav className="flex gap-1 overflow-x-auto px-3 pb-3 lg:flex-col">{nav.map(n => <button key={n.id} onClick={() => setSection(n.id)} className={`flex min-w-max items-center gap-3 rounded-lg px-4 py-3 text-sm font-semibold transition-colors ${section === n.id ? 'bg-[#e7f4f1] text-[#08756e]' : 'text-[#6d7e8c] hover:bg-[#f5f8f8]'}`}>{n.icon}{n.title}</button>)}</nav><div className="mt-auto hidden border-t border-[#edf1f2] p-5 lg:block"><p className="truncate text-sm font-semibold">{user.email}</p><p className="mt-1 text-xs capitalize text-[#8a9aa5]">{isAdmin ? 'Platform admin' : 'Tenant workspace'}</p><button onClick={() => send('/auth/logout', 'POST').finally(() => setUser(null))} className="mt-4 flex items-center gap-2 text-sm font-semibold text-[#718292] hover:text-accent"><LogOut size={16}/> Sign out</button></div></aside><main className="min-w-0 flex-1 lg:ml-64"><header className="flex items-center justify-between border-b border-[#e7edef] bg-white px-5 py-4 lg:px-10"><div className="text-xs font-semibold text-[#9aabb4]">Workspace <span className="mx-2">/</span> <span className="text-ink">{nav.find(n => n.id === section)?.title}</span></div><button className="flex items-center gap-2 text-sm text-[#687b89] lg:hidden" onClick={() => send('/auth/logout', 'POST').finally(() => setUser(null))}><LogOut size={16}/> Sign out</button><div className="hidden h-9 w-9 items-center justify-center rounded-full bg-[#daf0ec] text-sm font-bold text-accent lg:flex">{user.email[0].toUpperCase()}</div></header><div className="mx-auto max-w-7xl p-5 lg:p-10">{isAdmin ? <AdminPanel section={section} setSection={setSection}/> : <TenantPanel section={section} setSection={setSection}/>}</div></main></div>
 }
 
@@ -220,13 +224,13 @@ function AdminPanel({ section, setSection }: { section: Section; setSection: (s:
 }
 
 function TenantPanel({ section, setSection }: { section: Section; setSection: (s: Section) => void }) {
-  const [version, reload] = useState(0), [fields, setFields] = useState<Field[]>([]), [steps, setSteps] = useState<Step[]>([]), [error, setError] = useState('')
+  const [version, reload] = useState(0), [fields, setFields] = useState<Field[]>([]), [steps, setSteps] = useState<Step[]>([]), [problems, setProblems] = useState<Problem[]>([]), [error, setError] = useState('')
   const [workspace, setWorkspace] = useState<Tenant | null>(null)
-  useEffect(() => { Promise.all([all<Field>('/fields'), all<Step>('/steps')]).then(([f, s]) => { setFields(f); setSteps(s) }).catch(e => setError(errorText(e))) }, [version])
+  useEffect(() => { Promise.all([all<Field>('/fields'), all<Step>('/steps'), all<Problem>('/issues')]).then(([f, s, p]) => { setFields(f); setSteps(s); setProblems(p) }).catch(e => setError(errorText(e))) }, [version])
   useEffect(() => { api<Tenant>('/workspace').then(setWorkspace).catch(e => setError(errorText(e))) }, [version])
   const updated = () => { reload(v => v + 1); setError('') }
-  if (section === 'overview') return <><TenantOverview/><div className="mt-6 grid gap-5 md:grid-cols-3">{([{ id: 'tickets', title: 'Tickets', desc: 'Track and move requests', icon: <TicketIcon size={24}/> }, { id: 'steps', title: 'Workflow steps', desc: `${steps.length} steps configured`, icon: <ListTodo size={24}/> }, { id: 'fields', title: 'Master fields', desc: `${fields.length} reusable fields`, icon: <Layers3 size={24}/> }] as const).map(item => <button key={item.id} onClick={() => setSection(item.id)} className="card p-6 text-left hover:border-accent"><div className="mb-4 text-accent">{item.icon}</div><h2 className="font-extrabold">{item.title}</h2><p className="mt-1 text-sm text-[#718292]">{item.desc}</p><p className="mt-5 text-sm font-bold text-accent">Open {item.title.toLowerCase()} →</p></button>)}</div></>
-  return <><Notice message={error}/>{section === 'fields' ? <FieldsPanel fields={fields} updated={updated}/> : section === 'steps' ? <StepsPanel steps={steps} fields={fields} updated={updated}/> : section === 'tickets' ? <TicketWorkspace steps={steps} fields={fields} identifierLabel={workspace?.identifier_label ?? 'Company name'} updated={updated}/> : section === 'settings' ? <SettingsPanel workspace={workspace} updated={updated}/> : null}</>
+  if (section === 'overview') return <><TenantOverview/><div className="mt-6 grid gap-5 sm:grid-cols-2 xl:grid-cols-4">{([{ id: 'tickets', title: 'Tickets', desc: 'Track and move requests', icon: <TicketIcon size={24}/> }, { id: 'steps', title: 'Workflow steps', desc: `${steps.length} steps configured`, icon: <ListTodo size={24}/> }, { id: 'fields', title: 'Master fields', desc: `${fields.length} reusable fields`, icon: <Layers3 size={24}/> }, { id: 'problems', title: 'Issues', desc: `${problems.length} shared issue records`, icon: <Bug size={24}/> }] as const).map(item => <button key={item.id} onClick={() => setSection(item.id)} className="card p-6 text-left hover:border-accent"><div className="mb-4 text-accent">{item.icon}</div><h2 className="font-extrabold">{item.title}</h2><p className="mt-1 text-sm text-[#718292]">{item.desc}</p><p className="mt-5 text-sm font-bold text-accent">Open {item.title.toLowerCase()} →</p></button>)}</div></>
+  return <><Notice message={error}/>{section === 'fields' ? <FieldsPanel fields={fields} updated={updated}/> : section === 'steps' ? <StepsPanel steps={steps} fields={fields} updated={updated}/> : section === 'problems' ? <IssuesPanel issues={problems} updated={updated}/> : section === 'tickets' ? <TicketWorkspace steps={steps} fields={fields} problems={problems} identifierLabel={workspace?.identifier_label ?? 'Company name'} updated={updated}/> : section === 'settings' ? <SettingsPanel workspace={workspace} updated={updated}/> : null}</>
 }
 
 function SettingsPanel({ workspace, updated }: { workspace: Tenant | null; updated: () => void }) {
@@ -254,7 +258,139 @@ function SettingsPanel({ workspace, updated }: { workspace: Tenant | null; updat
   return <><Heading eyebrow="WORKSPACE SETTINGS" title="Workspace identity" subtitle="Choose the name and icon tenant users see throughout this workspace."/><Notice message={error}/><div className="max-w-2xl space-y-5"><form onSubmit={save} className="card space-y-5 p-6"><div><label className="label">Workspace name</label><input className="input" maxLength={120} required value={workspaceName} onChange={e => setWorkspaceName(e.target.value)} placeholder="My workspace"/><p className="mt-2 text-xs text-[#82929b]">This display name is separate from the platform tenant name.</p></div><div><label className="label">Ticket identifier label</label><input className="input" maxLength={80} required value={label} onChange={e => setLabel(e.target.value)} placeholder="Nama Perusahaan"/><p className="mt-2 text-xs text-[#82929b]">For example, “Nama Perusahaan” labels the identifier shown on every ticket.</p></div><button className="btn-primary">Save settings</button></form><section className="card flex flex-wrap items-center gap-5 p-6"><div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl bg-[#e5f3f0] text-xl font-extrabold text-accent">{iconSrc ? <img src={iconSrc} alt="Workspace icon preview" className="h-full w-full object-cover"/> : (workspaceName.trim()[0]?.toUpperCase() || 'W')}</div><div className="min-w-[200px] flex-1"><h2 className="font-[Manrope] font-extrabold">Workspace icon</h2><p className="mt-1 text-xs text-[#82929b]">PNG, JPEG or WebP. Images are resized to a 256 px square icon.</p><div className="mt-3 flex flex-wrap gap-2"><label className={`btn-secondary cursor-pointer !py-2 ${iconBusy ? 'pointer-events-none opacity-50' : ''}`}>{iconBusy ? 'Uploading…' : workspace?.workspace_icon_url ? 'Replace icon' : 'Upload icon'}<input className="sr-only" type="file" accept="image/png,image/jpeg,image/webp" disabled={iconBusy} onChange={e => { void uploadIcon(e.target.files?.[0]); e.currentTarget.value = '' }}/></label>{workspace?.workspace_icon_url && <button className="btn-danger !py-2" onClick={removeIcon}>Remove icon</button>}</div></div></section></div></>
 }
 
-function FieldsPanel({ fields, updated }: { fields: Field[]; updated: () => void }) {
+export function LegacyProblemsPanelBeforeProblemChanges({ problems, updated }: { problems: Problem[]; updated: () => void }) {
+  const [limit, setLimit] = useState(20), [offset, setOffset] = useState(0), [version, reload] = useState(0)
+  const result = usePage<Problem>('/issues', version, limit, offset)
+  const [editing, setEditing] = useState<Problem | null>(null), [show, setShow] = useState(false)
+  const [name, setName] = useState(''), [description, setDescription] = useState(''), [status, setStatus] = useState<Problem['status']>('identified'), [error, setError] = useState('')
+  const done = () => { reload(v => v + 1); updated(); setShow(false); setEditing(null); setError('') }
+  const open = (problem?: Problem) => { setEditing(problem ?? null); setName(problem?.name ?? ''); setDescription(problem?.description ?? ''); setStatus(problem?.status ?? 'identified'); setError(''); setShow(true) }
+  async function save(e: React.FormEvent) {
+    e.preventDefault()
+    try { await send(`/issues${editing ? `/${editing.id}` : ''}`, editing ? 'PUT' : 'POST', { name, description, status }); done() }
+    catch (e) { setError(errorText(e)) }
+  }
+  async function remove(problem: Problem) {
+    if (!confirm(`Delete problem “${problem.name}”? Problems referenced by tickets cannot be deleted.`)) return
+    try { await send(`/issues/${problem.id}`, 'DELETE'); done() } catch (e) { setError(errorText(e)) }
+  }
+  const label = (value: Problem['status']) => ({ identified: 'Identified', progress_fixing: 'Progress fixing', fixed: 'Fixed', recurring: 'Recurring', reappeared: 'Recurring' })[value]
+  return <><Heading eyebrow="WORKFLOW MASTER DATA" title="Problems" subtitle="Manage reusable problems and track their resolution status." action={<button className="btn-primary" onClick={() => open()}><Plus size={17}/> New problem</button>}/><Notice message={error || result.error}/>{show && <form onSubmit={save} className="card mb-6 grid gap-4 p-6 md:grid-cols-2"><div><label className="label">Problem name</label><input className="input" required maxLength={160} value={name} onChange={e => setName(e.target.value)} placeholder="PIB not available"/></div><div><label className="label">Status</label>{editing?.status === 'reappeared' ? <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm font-semibold text-amber-700">Reappeared <span className="ml-1 text-xs font-normal">(set automatically when selected again after being fixed)</span></div> : <select className="input" value={status} onChange={e => setStatus(e.target.value as Problem['status'])}><option value="identified">Identified</option><option value="progress_fixing">Progress fixing</option><option value="fixed">Fixed</option></select>}</div><div className="md:col-span-2"><label className="label">Description</label><textarea className="input min-h-24" maxLength={4000} value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional details about the known problem."/></div><div className="flex gap-2 md:col-span-2"><button className="btn-primary">{editing ? 'Save problem' : 'Create problem'}</button><button type="button" className="btn-secondary" onClick={() => setShow(false)}>Cancel</button></div></form>}<DataTable rows={result.items} total={result.total} loading={result.loading} limit={limit} offset={offset} setLimit={setLimit} setOffset={setOffset} columns={[{ title: 'Problem', render: p => <div><b>{p.name}</b>{p.description && <p className="mt-1 max-w-md truncate text-xs text-[#82929b]">{p.description}</p>}</div> }, { title: 'Status', render: p => <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${p.status === 'fixed' ? 'bg-emerald-50 text-emerald-700' : p.status === 'reappeared' ? 'bg-amber-50 text-amber-700' : 'bg-[#eef4f5] text-[#5f7380]'}`}>{label(p.status)}</span> }, { title: 'Problem step', render: p => p.generated_step_id ? <span className="rounded-md bg-[#eef5f5] px-2 py-1 text-xs font-semibold text-accent">Generated</span> : <span className="text-xs text-[#9aa8af]">Generated on first use</span> }, { title: 'Actions', render: p => <Actions edit={() => open(p)} remove={() => remove(p)}/> }]} /><p className="mt-4 text-xs text-[#8998a1]">{problems.length} active Problem records. A workflow step is generated when a ticket first selects a Problem. Selecting a fixed Problem marks it Reappeared automatically.</p></>
+}
+
+export function LegacyProblemsPanel({ problems, updated }: { problems: Problem[]; updated: () => void }) {
+  const [limit, setLimit] = useState(20), [offset, setOffset] = useState(0), [version, reload] = useState(0)
+  const result = usePage<Problem>('/issues', version, limit, offset)
+  const [editing, setEditing] = useState<Problem | null>(null), [show, setShow] = useState(false)
+  const [name, setName] = useState(''), [description, setDescription] = useState(''), [status, setStatus] = useState<Problem['status']>('identified'), [error, setError] = useState('')
+  const done = () => { reload(v => v + 1); updated(); setShow(false); setEditing(null); setError('') }
+  const open = (problem?: Problem) => { setEditing(problem ?? null); setName(problem?.name ?? ''); setDescription(problem?.description ?? ''); setStatus(problem?.status ?? 'identified'); setError(''); setShow(true) }
+  async function save(e: React.FormEvent) {
+    e.preventDefault()
+    try { await send(`/issues${editing ? `/${editing.id}` : ''}`, editing ? 'PUT' : 'POST', { name, description, status }); done() }
+    catch (e) { setError(errorText(e)) }
+  }
+  async function remove(problem: Problem) {
+    if (!confirm(`Delete problem “${problem.name}”? Problems attached to tickets cannot be deleted.`)) return
+    try { await send(`/issues/${problem.id}`, 'DELETE'); done() } catch (e) { setError(errorText(e)) }
+  }
+  const label = (value: Problem['status']) => ({ identified: 'Identified', progress_fixing: 'Progress fixing', fixed: 'Fixed', recurring: 'Recurring', reappeared: 'Recurring' })[value]
+  return <><Heading eyebrow="TICKET MASTER DATA" title="Problems" subtitle="Problem records attach directly to tickets; workflow steps remain independent." action={<button className="btn-primary" onClick={() => open()}><Plus size={17}/> New problem</button>}/><Notice message={error || result.error}/>{show && <form onSubmit={save} className="card mb-6 grid gap-4 p-6 md:grid-cols-2"><div><label className="label">Problem name</label><input className="input" required maxLength={160} value={name} onChange={e => setName(e.target.value)} placeholder="PIB unavailable"/></div><div><label className="label">Status</label>{editing?.status === 'reappeared' ? <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm font-semibold text-amber-700">Reappeared <span className="ml-1 text-xs font-normal">(set automatically)</span></div> : <select className="input" value={status} onChange={e => setStatus(e.target.value as Problem['status'])}><option value="identified">Identified</option><option value="progress_fixing">Progress fixing</option><option value="fixed">Fixed</option></select>}</div><div className="md:col-span-2"><label className="label">Description</label><textarea className="input min-h-24" maxLength={4000} value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional details about the known problem."/></div><div className="flex gap-2 md:col-span-2"><button className="btn-primary">{editing ? 'Save problem' : 'Create problem'}</button><button type="button" className="btn-secondary" onClick={() => setShow(false)}>Cancel</button></div></form>}<DataTable rows={result.items} total={result.total} loading={result.loading} limit={limit} offset={offset} setLimit={setLimit} setOffset={setOffset} columns={[{ title: 'Problem', render: p => <div><b>{p.name}</b>{p.description && <p className="mt-1 max-w-md truncate text-xs text-[#82929b]">{p.description}</p>}</div> }, { title: 'Status', render: p => <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${p.status === 'fixed' ? 'bg-emerald-50 text-emerald-700' : p.status === 'reappeared' ? 'bg-amber-50 text-amber-700' : 'bg-[#eef4f5] text-[#5f7380]'}`}>{label(p.status)}</span> }, { title: 'Ticket behavior', render: p => <span className="text-xs text-[#718292]">{p.status === 'fixed' ? 'Linked open tickets are closed' : 'Attached on steps that use Problem'}</span> }, { title: 'Actions', render: p => <Actions edit={() => open(p)} remove={() => remove(p)}/> }]} /><p className="mt-4 text-xs text-[#8998a1]">{problems.length} active Problems. Add the Problem master field to any step where users can set or change ticket metadata. Fixed Problems close their open tickets without changing workflow steps.</p></>
+}
+
+export function LegacyProblemsPanelWithAttachments({ problems, updated }: { problems: Problem[]; updated: () => void }) {
+  const [limit, setLimit] = useState(20), [offset, setOffset] = useState(0), [version, reload] = useState(0)
+  const result = usePage<Problem>('/issues', version, limit, offset)
+  const [editing, setEditing] = useState<Problem | null>(null), [show, setShow] = useState(false)
+  const [name, setName] = useState(''), [description, setDescription] = useState(''), [status, setStatus] = useState<Problem['status']>('identified')
+  const [attachments, setAttachments] = useState<ProblemAttachment[]>([]), [uploading, setUploading] = useState(false), [error, setError] = useState('')
+  const done = () => { reload(v => v + 1); updated(); setShow(false); setEditing(null); setError('') }
+  const open = (problem?: Problem) => {
+    setEditing(problem ?? null); setName(problem?.name ?? ''); setDescription(problem?.description ?? '')
+    setStatus(problem?.status ?? 'identified'); setAttachments(problem?.files ?? []); setError(''); setShow(true)
+  }
+  async function uploadFiles(list: FileList | null) {
+    if (!list?.length) return
+    setUploading(true); setError('')
+    try {
+      for (const file of Array.from(list).slice(0, Math.max(0, 20 - attachments.length))) {
+        const form = new FormData(); form.append('file', file)
+        const response = await fetch('/api/files', { method: 'POST', credentials: 'same-origin', body: form })
+        if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || `Upload failed (${response.status})`) }
+        const uploaded = await response.json() as ProblemAttachment
+        setAttachments(current => [...current, uploaded])
+      }
+    } catch (e) { setError(errorText(e)) } finally { setUploading(false) }
+  }
+  async function save(e: React.FormEvent) {
+    e.preventDefault()
+    try {
+      await send(`/issues${editing ? `/${editing.id}` : ''}`, editing ? 'PUT' : 'POST',
+        { name, description, status, file_ids: attachments.map(file => file.file_id) })
+      done()
+    } catch (e) { setError(errorText(e)) }
+  }
+  async function remove(problem: Problem) {
+    if (!confirm(`Delete problem “${problem.name}”? Problems attached to tickets cannot be deleted.`)) return
+    try { await send(`/issues/${problem.id}`, 'DELETE'); done() } catch (e) { setError(errorText(e)) }
+  }
+  const statusLabel = (value: Problem['status']) => ({ identified: 'Identified', progress_fixing: 'Progress fixing', fixed: 'Fixed', recurring: 'Recurring', reappeared: 'Recurring' })[value]
+  return <><Heading eyebrow="TICKET MASTER DATA" title="Problems" subtitle="Manage ticket-level problems and attach supporting files." action={<button className="btn-primary" onClick={() => open()}><Plus size={17}/> New problem</button>}/><Notice message={error || result.error}/>{show && <form onSubmit={save} className="card mb-6 grid gap-4 p-6 md:grid-cols-2">
+    <div><label className="label">Problem name</label><input className="input" required maxLength={160} value={name} onChange={e => setName(e.target.value)}/></div>
+    <div><label className="label">Status</label><select className="input" value={status} onChange={e => setStatus(e.target.value as Problem['status'])}><option value="identified">Identified</option><option value="progress_fixing">Progress fixing</option><option value="fixed">Fixed</option><option value="reappeared" disabled>Reappeared (automatic)</option></select>{status === 'reappeared' && <p className="mt-1 text-xs text-[#82929b]">Choose an active status to continue working on this problem.</p>}</div>
+    <div className="md:col-span-2"><label className="label">Description</label><textarea className="input min-h-24" maxLength={4000} value={description} onChange={e => setDescription(e.target.value)}/></div>
+    <div className="md:col-span-2"><label className="label">Attachments ({attachments.length}/20)</label><input className="input" type="file" multiple disabled={uploading || attachments.length >= 20} onChange={e => { void uploadFiles(e.target.files); e.currentTarget.value = '' }}/>{uploading && <p className="mt-1 text-xs text-[#718292]">Uploading…</p>}<div className="mt-2 space-y-2">{attachments.map(file => <div key={file.file_id} className="flex items-center justify-between gap-3 rounded-lg bg-[#f7f9f9] px-3 py-2 text-sm"><a className="truncate font-semibold text-accent underline" href={file.access_url} target="_blank" rel="noreferrer">{file.name}</a><button type="button" className="text-xs font-bold text-red-600" onClick={() => setAttachments(current => current.filter(item => item.file_id !== file.file_id))}>Remove</button></div>)}</div></div>
+    <div className="flex gap-2 md:col-span-2"><button className="btn-primary" disabled={uploading}>{editing ? 'Save problem' : 'Create problem'}</button><button type="button" className="btn-secondary" onClick={() => setShow(false)}>Cancel</button></div>
+  </form>}<DataTable rows={result.items} total={result.total} loading={result.loading} limit={limit} offset={offset} setLimit={setLimit} setOffset={setOffset} columns={[{ title: 'Problem', render: p => <div><b>{p.name}</b>{p.description && <p className="mt-1 max-w-md truncate text-xs text-[#82929b]">{p.description}</p>}</div> }, { title: 'Attachments', render: p => p.files.length ? <div className="flex max-w-sm flex-wrap gap-1">{p.files.map(file => <a key={file.file_id} className="rounded bg-[#eef5f5] px-2 py-1 text-xs font-semibold text-accent hover:underline" href={file.access_url} target="_blank" rel="noreferrer">{file.name}</a>)}</div> : <span className="text-xs text-[#a1adb4]">—</span> }, { title: 'Status', render: p => <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${p.status === 'fixed' ? 'bg-emerald-50 text-emerald-700' : p.status === 'reappeared' ? 'bg-amber-50 text-amber-700' : 'bg-[#eef4f5] text-[#5f7380]'}`}>{statusLabel(p.status)}</span> }, { title: 'Actions', render: p => <Actions edit={() => open(p)} remove={() => remove(p)}/> }]} /><p className="mt-4 text-xs text-[#8998a1]">{problems.length} active Problem records. Attachments are protected by this tenant’s file-access key.</p></>
+}
+
+function IssuesPanel({ issues, updated }: { issues: Problem[]; updated: () => void }) {
+  const [limit, setLimit] = useState(20), [offset, setOffset] = useState(0), [version, reload] = useState(0)
+  const result = usePage<Problem>('/issues', version, limit, offset)
+  const [editing, setEditing] = useState<Problem | null>(null), [show, setShow] = useState(false)
+  const [name, setName] = useState(''), [description, setDescription] = useState(''), [status, setStatus] = useState<Problem['status']>('identified')
+  const [attachments, setAttachments] = useState<ProblemAttachment[]>([]), [uploading, setUploading] = useState(false), [error, setError] = useState('')
+  const done = () => { reload(v => v + 1); updated(); setShow(false); setEditing(null); setError('') }
+  const open = (issue?: Problem) => {
+    setEditing(issue ?? null); setName(issue?.name ?? ''); setDescription(issue?.description ?? '')
+    setStatus(issue?.status ?? 'identified'); setAttachments(issue?.files ?? []); setError(''); setShow(true)
+  }
+  async function uploadFiles(list: FileList | null) {
+    if (!list?.length) return
+    setUploading(true); setError('')
+    try {
+      for (const file of Array.from(list).slice(0, Math.max(0, 20 - attachments.length))) {
+        const form = new FormData(); form.append('file', file)
+        const response = await fetch('/api/files', { method: 'POST', credentials: 'same-origin', body: form })
+        if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || `Upload failed (${response.status})`) }
+        const uploaded = await response.json() as ProblemAttachment
+        setAttachments(current => [...current, uploaded])
+      }
+    } catch (e) { setError(errorText(e)) } finally { setUploading(false) }
+  }
+  async function save(e: React.FormEvent) {
+    e.preventDefault()
+    try {
+      await send(`/issues${editing ? `/${editing.id}` : ''}`, editing ? 'PUT' : 'POST',
+        { name, description, status, file_ids: attachments.map(file => file.file_id) })
+      done()
+    } catch (e) { setError(errorText(e)) }
+  }
+  async function remove(issue: Problem) {
+    if (!confirm(`Delete issue “${issue.name}”? Issues attached to tickets cannot be deleted.`)) return
+    try { await send(`/issues/${issue.id}`, 'DELETE'); done() } catch (e) { setError(errorText(e)) }
+  }
+  const statusLabel = (value: Problem['status']) => ({ identified: 'Identified', progress_fixing: 'Progress fixing', fixed: 'Fixed', recurring: 'Recurring', reappeared: 'Recurring' })[value]
+  return <><Heading eyebrow="TICKET MASTER DATA" title="Issues" subtitle="Manage issue records, statuses and supporting files attached to tickets." action={<button className="btn-primary" onClick={() => open()}><Plus size={17}/> New issue</button>}/><Notice message={error || result.error}/>{show && <form onSubmit={save} className="card mb-6 grid gap-4 p-6 md:grid-cols-2">
+    <div><label className="label">Issue name</label><input className="input" required maxLength={160} value={name} onChange={e => setName(e.target.value)} placeholder="PIB unavailable"/></div>
+    <div><label className="label">Status</label><select className="input" value={status} onChange={e => setStatus(e.target.value as Problem['status'])}><option value="identified">Identified</option><option value="progress_fixing">Progress fixing</option><option value="fixed">Fixed</option><option value="recurring" disabled>Recurring (automatic)</option></select>{status === 'recurring' && <p className="mt-1 text-xs text-[#82929b]">Choose an active status to continue working on this issue.</p>}</div>
+    <div className="md:col-span-2"><label className="label">Description</label><textarea className="input min-h-24" maxLength={4000} value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional details about the issue."/></div>
+    <div className="md:col-span-2"><label className="label">Attachments ({attachments.length}/20)</label><input className="input" type="file" multiple disabled={uploading || attachments.length >= 20} onChange={e => { void uploadFiles(e.target.files); e.currentTarget.value = '' }}/>{uploading && <p className="mt-1 text-xs text-[#718292]">Uploading…</p>}<div className="mt-2 space-y-2">{attachments.map(file => <div key={file.file_id} className="flex items-center justify-between gap-3 rounded-lg bg-[#f7f9f9] px-3 py-2 text-sm"><a className="truncate font-semibold text-accent underline" href={file.access_url} target="_blank" rel="noreferrer">{file.name}</a><button type="button" className="text-xs font-bold text-red-600" onClick={() => setAttachments(current => current.filter(item => item.file_id !== file.file_id))}>Remove</button></div>)}</div></div>
+    <div className="flex gap-2 md:col-span-2"><button className="btn-primary" disabled={uploading}>{editing ? 'Save issue' : 'Create issue'}</button><button type="button" className="btn-secondary" onClick={() => setShow(false)}>Cancel</button></div>
+  </form>}<DataTable rows={result.items} total={result.total} loading={result.loading} limit={limit} offset={offset} setLimit={setLimit} setOffset={setOffset} columns={[{ title: 'Issue', render: issue => <div><b>{issue.name}</b>{issue.description && <p className="mt-1 max-w-md truncate text-xs text-[#82929b]">{issue.description}</p>}</div> }, { title: 'Attachments', render: issue => issue.files.length ? <div className="flex max-w-sm flex-wrap gap-1">{issue.files.map(file => <a key={file.file_id} className="rounded bg-[#eef5f5] px-2 py-1 text-xs font-semibold text-accent hover:underline" href={file.access_url} target="_blank" rel="noreferrer">{file.name}</a>)}</div> : <span className="text-xs text-[#a1adb4]">—</span> }, { title: 'Status', render: issue => <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${issue.status === 'fixed' ? 'bg-emerald-50 text-emerald-700' : issue.status === 'reappeared' ? 'bg-amber-50 text-amber-700' : 'bg-[#eef4f5] text-[#5f7380]'}`}>{statusLabel(issue.status)}</span> }, { title: 'Actions', render: issue => <Actions edit={() => open(issue)} remove={() => remove(issue)}/> }]} /><p className="mt-4 text-xs text-[#8998a1]">{issues.length} active issues. Fixed issues close linked open tickets; selecting a fixed issue again marks it Recurring.</p></>
+}
+
+export function LegacyFieldsPanel({ fields, updated }: { fields: Field[]; updated: () => void }) {
   const [limit, setLimit] = useState(20), [offset, setOffset] = useState(0), [version, reload] = useState(0)
   const result = usePage<Field>('/fields', version, limit, offset)
   const [editing, setEditing] = useState<number | null>(null), [show, setShow] = useState(false), [name, setName] = useState(''), [key, setKey] = useState(''), [type, setType] = useState<Field['type']>('text'), [options, setOptions] = useState(''), [error, setError] = useState('')
@@ -262,7 +398,59 @@ function FieldsPanel({ fields, updated }: { fields: Field[]; updated: () => void
   const open = (f?: Field) => { setEditing(f?.id ?? null); setName(f?.name ?? ''); setKey(f?.key ?? ''); setType(f?.type ?? 'text'); setOptions(f?.options.join(', ') ?? ''); setShow(true); setError('') }
   async function save(e: React.FormEvent) { e.preventDefault(); try { await send(`/fields${editing ? `/${editing}` : ''}`, editing ? 'PUT' : 'POST', { name, key, type, options: type === 'select' ? options.split(',').map(s => s.trim()).filter(Boolean) : [] }); done() } catch (e) { setError(errorText(e)) } }
   async function remove(id: number) { if (!confirm('Delete this master field?')) return; try { await send(`/fields/${id}`, 'DELETE'); done() } catch (e) { setError(errorText(e)) } }
-  return <><Heading eyebrow="WORKFLOW BUILDER" title="Master fields" subtitle="Create fields once and reuse them across workflow steps." action={<button className="btn-primary" onClick={() => open()}><Plus size={17}/> New field</button>}/><Notice message={error || result.error}/>{show && <form onSubmit={save} className="card mb-6 grid gap-4 p-6 md:grid-cols-2"><div className="col-span-full flex justify-between"><h2 className="font-bold">{editing ? 'Edit field' : 'New field'}</h2><button type="button" onClick={() => setShow(false)}><X size={18}/></button></div><div><label className="label">Name</label><input className="input" required value={name} onChange={e => setName(e.target.value)}/></div><div><label className="label">Key</label><input className="input" required pattern="[a-z][a-z0-9_]*" disabled={!!editing} value={key} onChange={e => setKey(e.target.value)} placeholder="customer_name"/></div><div><label className="label">Type</label><select className="input" disabled={!!editing} value={type} onChange={e => setType(e.target.value as Field['type'])}>{['text', 'number', 'date', 'boolean', 'select', 'array', 'file'].map(t => <option key={t}>{t}</option>)}</select></div>{type === 'select' && <div><label className="label">Options (comma-separated)</label><input className="input" required value={options} onChange={e => setOptions(e.target.value)}/></div>}{type === 'array' && <p className="text-xs text-[#718292]">Array fields accept any number of string values, entered separately on ticket forms.</p>}{type === 'file' && <p className="text-xs text-[#718292]">Upload a tenant-owned file; links use this tenant’s API key.</p>}<div className="col-span-full"><button className="btn-primary">Save field</button></div></form>}<DataTable columns={[{ title: 'Field', render: f => <b>{f.name}</b> }, { title: 'Key', render: f => <span className="font-mono text-xs text-accent">{f.key}</span> }, { title: 'Type', render: f => <span className="capitalize">{f.type}</span> }, { title: 'Actions', render: f => <Actions edit={() => open(f)} remove={() => remove(f.id)}/> }]} rows={result.items} total={result.total} loading={result.loading} limit={limit} offset={offset} setLimit={setLimit} setOffset={setOffset}/><p className="mt-4 text-xs text-[#8a9aa5]">{fields.length} fields available for step forms.</p></>
+  return <><Heading eyebrow="WORKFLOW BUILDER" title="Master fields" subtitle="Create fields once and reuse them across workflow steps." action={<button className="btn-primary" onClick={() => open()}><Plus size={17}/> New field</button>}/><Notice message={error || result.error}/>{show && <form onSubmit={save} className="card mb-6 grid gap-4 p-6 md:grid-cols-2"><div className="col-span-full flex justify-between"><h2 className="font-bold">{editing ? 'Edit field' : 'New field'}</h2><button type="button" onClick={() => setShow(false)}><X size={18}/></button></div><div><label className="label">Name</label><input className="input" required value={name} onChange={e => setName(e.target.value)}/></div><div><label className="label">Key</label><input className="input" required pattern="[a-z][a-z0-9_]*" disabled={!!editing} value={key} onChange={e => setKey(e.target.value)} placeholder="customer_name"/></div><div><label className="label">Type</label><select className="input" disabled={!!editing} value={type} onChange={e => setType(e.target.value as Field['type'])}>{['text', 'number', 'date', 'boolean', 'select', 'array', 'file', 'problem'].map(t => <option key={t}>{t}</option>)}</select></div>{type === 'select' && <div><label className="label">Options (comma-separated)</label><input className="input" required value={options} onChange={e => setOptions(e.target.value)}/></div>}{type === 'array' && <p className="text-xs text-[#718292]">Array fields accept any number of string values, entered separately on ticket forms.</p>}{type === 'file' && <p className="text-xs text-[#718292]">Upload a tenant-owned file; links use this tenant’s API key.</p>}{type === 'problem' && <p className="text-xs text-[#718292]">Problem choices come from Problem master data. Each step can use this field once; each Problem gets its own generated step.</p>}<div className="col-span-full"><button className="btn-primary">Save field</button></div></form>}<DataTable columns={[{ title: 'Field', render: f => <b>{f.name}</b> }, { title: 'Key', render: f => <span className="font-mono text-xs text-accent">{f.key}</span> }, { title: 'Type', render: f => <span className="capitalize">{f.type}</span> }, { title: 'Actions', render: f => <Actions edit={() => open(f)} remove={() => remove(f.id)}/> }]} rows={result.items} total={result.total} loading={result.loading} limit={limit} offset={offset} setLimit={setLimit} setOffset={setOffset}/><p className="mt-4 text-xs text-[#8a9aa5]">{fields.length} fields available for step forms.</p></>
+}
+
+export function LegacyFieldsPanelWithOriginalTerms({ fields, updated }: { fields: Field[]; updated: () => void }) {
+  const [limit, setLimit] = useState(20), [offset, setOffset] = useState(0), [version, reload] = useState(0)
+  const result = usePage<Field>('/fields', version, limit, offset)
+  const [editing, setEditing] = useState<number | null>(null), [show, setShow] = useState(false)
+  const [name, setName] = useState(''), [key, setKey] = useState(''), [type, setType] = useState<Field['type']>('text')
+  const [options, setOptions] = useState(''), [error, setError] = useState('')
+  const done = () => { reload(v => v + 1); updated(); setShow(false) }
+  const open = (field?: Field) => {
+    setEditing(field?.id ?? null); setName(field?.name ?? ''); setKey(field?.key ?? '')
+    setType(field?.type ?? 'text'); setOptions(field?.options.join(', ') ?? ''); setError(''); setShow(true)
+  }
+  async function save(e: React.FormEvent) {
+    e.preventDefault()
+    try {
+      await send(`/fields${editing ? `/${editing}` : ''}`, editing ? 'PUT' : 'POST', {
+        name, key, type, options: type === 'select' ? options.split(',').map(value => value.trim()).filter(Boolean) : [],
+      })
+      done()
+    } catch (e) { setError(errorText(e)) }
+  }
+  async function remove(field: Field) {
+    if (!confirm(`Delete master field “${field.name}”?`)) return
+    try { await send(`/fields/${field.id}`, 'DELETE'); done() } catch (e) { setError(errorText(e)) }
+  }
+  return <><Heading eyebrow="WORKFLOW BUILDER" title="Master fields" subtitle="Create reusable fields and attach them to workflow steps." action={<button className="btn-primary" onClick={() => open()}><Plus size={17}/> New field</button>}/><Notice message={error || result.error}/>{show && <form onSubmit={save} className="card mb-6 grid gap-4 p-6 md:grid-cols-2"><div><label className="label">Name</label><input className="input" required value={name} onChange={e => setName(e.target.value)}/></div><div><label className="label">Key</label><input className="input" required pattern="[a-z][a-z0-9_]*" disabled={!!editing} value={key} onChange={e => setKey(e.target.value)} placeholder="customer_name"/></div><div><label className="label">Type</label><select className="input" disabled={!!editing} value={type} onChange={e => setType(e.target.value as Field['type'])}>{['text', 'number', 'date', 'boolean', 'select', 'array', 'file', 'problem'].map(value => <option key={value}>{value}</option>)}</select></div>{type === 'select' && <div><label className="label">Options (comma-separated)</label><input className="input" required value={options} onChange={e => setOptions(e.target.value)}/></div>}{type === 'array' && <p className="text-xs text-[#718292]">Enter free-form string values on the ticket form; exports join them with commas.</p>}{type === 'file' && <p className="text-xs text-[#718292]">Upload a tenant-owned file from the ticket form.</p>}{type === 'problem' && <p className="text-xs text-[#718292]">Selecting this field lets the step set the ticket’s Problem. The association remains on the ticket when it moves to other steps.</p>}<div className="flex gap-2 md:col-span-2"><button className="btn-primary">{editing ? 'Save field' : 'Create field'}</button><button type="button" className="btn-secondary" onClick={() => setShow(false)}>Cancel</button></div></form>}<DataTable rows={result.items} total={result.total} loading={result.loading} limit={limit} offset={offset} setLimit={setLimit} setOffset={setOffset} columns={[{ title: 'Field', render: field => <b>{field.name}</b> }, { title: 'Key', render: field => <span className="font-mono text-xs text-accent">{field.key}</span> }, { title: 'Type', render: field => <span className="capitalize">{field.type}</span> }, { title: 'Actions', render: field => <Actions edit={() => open(field)} remove={() => remove(field)}/> }]} /><p className="mt-4 text-xs text-[#8a9aa5]">{fields.length} reusable fields. Problem choices are managed separately from this catalog.</p></>
+}
+
+function FieldsPanel({ fields, updated }: { fields: Field[]; updated: () => void }) {
+  const [limit, setLimit] = useState(20), [offset, setOffset] = useState(0), [version, reload] = useState(0)
+  const result = usePage<Field>('/fields', version, limit, offset)
+  const [editing, setEditing] = useState<number | null>(null), [show, setShow] = useState(false)
+  const [name, setName] = useState(''), [key, setKey] = useState(''), [type, setType] = useState<Field['type']>('text')
+  const [options, setOptions] = useState(''), [error, setError] = useState('')
+  const done = () => { reload(v => v + 1); updated(); setShow(false) }
+  const open = (field?: Field) => {
+    setEditing(field?.id ?? null); setName(field?.name ?? ''); setKey(field?.key ?? '')
+    setType(field?.type ?? 'text'); setOptions(field?.options.join(', ') ?? ''); setError(''); setShow(true)
+  }
+  async function save(e: React.FormEvent) {
+    e.preventDefault()
+    try { await send(`/fields${editing ? `/${editing}` : ''}`, editing ? 'PUT' : 'POST', { name, key, type, options: type === 'select' ? options.split(',').map(v => v.trim()).filter(Boolean) : [] }); done() }
+    catch (e) { setError(errorText(e)) }
+  }
+  async function remove(field: Field) {
+    if (!confirm(`Delete master field “${field.name}”?`)) return
+    try { await send(`/fields/${field.id}`, 'DELETE'); done() } catch (e) { setError(errorText(e)) }
+  }
+  const types: Field['type'][] = ['text', 'number', 'date', 'boolean', 'select', 'array', 'file', 'problem']
+  const typeLabel = (value: Field['type']) => value === 'problem' ? 'Issue' : value
+  return <><Heading eyebrow="WORKFLOW BUILDER" title="Master fields" subtitle="Create reusable fields and attach them to workflow steps." action={<button className="btn-primary" onClick={() => open()}><Plus size={17}/> New field</button>}/><Notice message={error || result.error}/>{show && <form onSubmit={save} className="card mb-6 grid gap-4 p-6 md:grid-cols-2"><div><label className="label">Field name</label><input className="input" required value={name} onChange={e => setName(e.target.value)}/></div><div><label className="label">Key</label><input className="input" required pattern="[a-z][a-z0-9_]*" disabled={!!editing} value={key} onChange={e => setKey(e.target.value)} placeholder="customer_name"/></div><div><label className="label">Type</label><select className="input" disabled={!!editing} value={type} onChange={e => setType(e.target.value as Field['type'])}>{types.map(value => <option key={value} value={value}>{typeLabel(value)}</option>)}</select></div>{type === 'select' && <div><label className="label">Options (comma-separated)</label><input className="input" required value={options} onChange={e => setOptions(e.target.value)}/></div>}{type === 'problem' && <p className="text-xs text-[#718292]">Issue choices come from the Issues master list. The selected issue is saved on the ticket and stays attached across workflow steps.</p>}{type === 'array' && <p className="text-xs text-[#718292]">Array values are free-form strings entered separately on the ticket form.</p>}{type === 'file' && <p className="text-xs text-[#718292]">Upload tenant-owned files on the ticket form.</p>}<div className="flex gap-2 md:col-span-2"><button className="btn-primary">{editing ? 'Save field' : 'Create field'}</button><button type="button" className="btn-secondary" onClick={() => setShow(false)}>Cancel</button></div></form>}<DataTable rows={result.items} total={result.total} loading={result.loading} limit={limit} offset={offset} setLimit={setLimit} setOffset={setOffset} columns={[{ title: 'Field', render: field => <b>{field.name}</b> }, { title: 'Key', render: field => <span className="font-mono text-xs text-accent">{field.key}</span> }, { title: 'Type', render: field => <span className="capitalize">{typeLabel(field.type)}</span> }, { title: 'Actions', render: field => <Actions edit={() => open(field)} remove={() => remove(field)}/> }]} /><p className="mt-4 text-xs text-[#8a9aa5]">{fields.length} active custom fields available across workflow steps.</p></>
 }
 
 function StepsPanel({ steps, fields, updated }: { steps: Step[]; fields: Field[]; updated: () => void }) {
@@ -276,9 +464,22 @@ function StepsPanel({ steps, fields, updated }: { steps: Step[]; fields: Field[]
   return <><Heading eyebrow="WORKFLOW BUILDER" title="Workflow steps" subtitle="A ticket can begin, move, or finish at any step." action={<button className="btn-primary" onClick={() => open()}><Plus size={17}/> New step</button>}/><Notice message={error || result.error}/>{show && <form onSubmit={save} className="card mb-6 space-y-4 p-6"><div className="flex justify-between"><h2 className="font-bold">{editing ? 'Edit step' : 'New step'}</h2><button type="button" onClick={() => setShow(false)}><X size={18}/></button></div><div className="grid gap-4 md:grid-cols-2"><div><label className="label">Step name</label><input className="input" required value={name} onChange={e => setName(e.target.value)}/></div><div><label className="label">Description</label><input className="input" value={description} onChange={e => setDescription(e.target.value)}/></div></div><div><p className="label">Fields needed at this step</p><div className="grid gap-2 md:grid-cols-2">{fields.map(f => { const selected = bindings.find(b => b.field_id === f.id); return <div key={f.id} className="flex items-center justify-between rounded-lg border border-[#e7edef] p-3 text-sm"><label className="flex items-center gap-2"><input type="checkbox" checked={!!selected} onChange={e => setBindings(e.target.checked ? [...bindings, { field_id: f.id, required: false }] : bindings.filter(b => b.field_id !== f.id))}/>{f.name}</label>{selected && <label className="flex items-center gap-2 text-xs text-[#748390]"><input type="checkbox" checked={selected.required} onChange={e => setBindings(bindings.map(b => b.field_id === f.id ? { ...b, required: e.target.checked } : b))}/> Required</label>}</div> })}</div>{!fields.length && <p className="text-sm text-[#718292]">Create master fields first to add them here.</p>}</div><button className="btn-primary">Save step</button></form>}<DataTable columns={[{ title: 'Step', render: s => <b>{s.name}</b> }, { title: 'Description', render: s => s.description || '—' }, { title: 'Fields', render: s => `${s.fields.length} fields` }, { title: 'Actions', render: s => <Actions edit={() => open(s)} remove={() => remove(s.id)}/> }]} rows={result.items} total={result.total} loading={result.loading} limit={limit} offset={offset} setLimit={setLimit} setOffset={setOffset}/><p className="mt-4 text-xs text-[#8a9aa5]">{steps.length} steps available for tickets.</p></>
 }
 
-export function FieldForm({ step, fields, values, setValues }: { step?: Step; fields: Field[]; values: Record<string, unknown>; setValues: (v: Record<string, unknown>) => void }) {
+export function FieldForm({ step, fields, values, setValues, problems = [] }: { step?: Step; fields: Field[]; values: Record<string, unknown>; setValues: (v: Record<string, unknown>) => void; problems?: Problem[] }) {
   if (!step) return <p className="text-sm text-[#718292]">Choose a step to see its fields.</p>
-  return <div className="grid gap-4 md:grid-cols-2">{step.fields.map(binding => { const f = fields.find(field => field.id === binding.field_id); if (!f) return null; const key = String(f.id); const value = values[key]; return <div key={key}><label className="label">{f.name} {binding.required && <span className="text-red-500">*</span>}</label>{f.type === 'boolean' ? <select className="input" value={value === undefined ? '' : String(value)} required={binding.required} onChange={e => setValues({ ...values, [key]: e.target.value === '' ? null : e.target.value === 'true' })}><option value="">Select</option><option value="true">Yes</option><option value="false">No</option></select> : f.type === 'select' ? <select className="input" value={String(value ?? '')} required={binding.required} onChange={e => setValues({ ...values, [key]: e.target.value })}><option value="">Select</option>{f.options.map(o => <option key={o}>{o}</option>)}</select> : f.type === 'array' ? <ArrayField value={value} onChange={v => setValues({ ...values, [key]: v })} required={binding.required}/> : f.type === 'file' ? <FileField value={value} onChange={v => setValues({ ...values, [key]: v })} required={binding.required}/> : <input className="input" type={f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text'} step={f.type === 'number' ? 'any' : undefined} required={binding.required} value={String(value ?? '')} onChange={e => setValues({ ...values, [key]: f.type === 'number' ? (e.target.value === '' ? null : Number(e.target.value)) : e.target.value })}/>}</div> })}{!step.fields.length && <p className="text-sm text-[#718292]">No fields required for this step.</p>}</div>
+  return <div className="grid gap-4 md:grid-cols-2">{step.fields.map(binding => {
+    const f = fields.find(field => field.id === binding.field_id)
+    if (!f) return null
+    const key = String(f.id), value = values[key]
+    const problemValue = value && typeof value === 'object' && 'problem_id' in value
+      ? Number((value as { problem_id: number }).problem_id) : Number(value)
+    return <div key={key}><label className="label">{f.name} {binding.required && <span className="text-red-500">*</span>}</label>
+      {f.type === 'boolean' ? <select className="input" value={value === undefined ? '' : String(value)} required={binding.required} onChange={e => setValues({ ...values, [key]: e.target.value === '' ? null : e.target.value === 'true' })}><option value="">Select</option><option value="true">Yes</option><option value="false">No</option></select>
+        : f.type === 'select' ? <select className="input" value={String(value ?? '')} required={binding.required} onChange={e => setValues({ ...values, [key]: e.target.value })}><option value="">Select</option>{f.options.map(o => <option key={o}>{o}</option>)}</select>
+        : f.type === 'problem' ? <select className="input" value={problemValue ? String(problemValue) : ''} required={binding.required} onChange={e => setValues({ ...values, [key]: e.target.value ? Number(e.target.value) : null })}><option value="">Choose an issue</option>{problems.map(problem => <option key={problem.id} value={problem.id}>{problem.name} · {issueStatusLabel(problem.status)}</option>)}</select>
+        : f.type === 'array' ? <ArrayField value={value} onChange={v => setValues({ ...values, [key]: v })} required={binding.required}/>
+        : f.type === 'file' ? <FileField value={value} onChange={v => setValues({ ...values, [key]: v })} required={binding.required}/>
+        : <input className="input" type={f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text'} step={f.type === 'number' ? 'any' : undefined} required={binding.required} value={String(value ?? '')} onChange={e => setValues({ ...values, [key]: f.type === 'number' ? (e.target.value === '' ? null : Number(e.target.value)) : e.target.value })}/>}</div>
+  })}{!step.fields.length && <p className="text-sm text-[#718292]">No fields required for this step.</p>}</div>
 }
 
 function ArrayField({ value, onChange, required }: { value: unknown; onChange: (value: string[]) => void; required: boolean }) {
@@ -292,20 +493,33 @@ function ArrayField({ value, onChange, required }: { value: unknown; onChange: (
   <button type="button" className="btn-secondary !py-2" onClick={() => onChange([...items, ''])}><Plus size={14}/> Add value</button></div>
 }
 
-function FileField({ value, onChange, required }: { value: unknown; onChange: (value: unknown) => void; required: boolean }) {
+export type UploadedFileValue = { file_id: number; name?: string; access_url?: string; content_type?: string }
+
+export async function uploadFile(file: File): Promise<UploadedFileValue> {
+  const data = new FormData(); data.append('file', file)
+  const res = await fetch('/api/files', { method: 'POST', credentials: 'same-origin', body: data })
+  if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.detail || `Upload failed (${res.status})`) }
+  return res.json()
+}
+
+export function FilePreviewList({ value, onRemove }: { value: unknown; onRemove?: (index: number) => void }) {
+  const items: UploadedFileValue[] = Array.isArray(value) ? value : value && typeof value === 'object' ? [value as UploadedFileValue] : []
+  return <div className="space-y-2">{items.map((item, index) => item.content_type?.startsWith('image/') ?
+    <div key={item.file_id ?? index} className="flex items-start gap-2"><a href={item.access_url} target="_blank" rel="noreferrer" aria-label={`Preview ${item.name ?? 'image'}`}><img src={item.access_url} alt={item.name ?? 'Uploaded image'} className="max-h-40 max-w-full rounded-lg border border-[#e5ebee] object-contain"/></a>{onRemove && <button type="button" className="text-[#718292]" aria-label={`Remove ${item.name ?? 'image'}`} onClick={() => onRemove(index)}><X size={15}/></button>}</div> :
+    <div key={item.file_id ?? index} className="flex items-center gap-2"><a className="btn-secondary !py-1.5 text-sm" href={item.access_url} download={item.name} target="_blank" rel="noreferrer"><Download size={14}/>{item.name ?? 'Download file'}</a>{onRemove && <button type="button" className="text-[#718292]" aria-label={`Remove ${item.name ?? 'file'}`} onClick={() => onRemove(index)}><X size={15}/></button>}</div>
+  )}</div>
+}
+
+export function FileField({ value, onChange, required }: { value: unknown; onChange: (value: UploadedFileValue[]) => void; required: boolean }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState('')
-  const item = value && typeof value === 'object' ? value as { name?: string; access_url?: string } : null
-  async function upload(file?: File) {
-    if (!file) return
+  const items: UploadedFileValue[] = Array.isArray(value) ? value : value && typeof value === 'object' ? [value as UploadedFileValue] : []
+  async function upload(files: FileList | null) {
+    if (!files?.length) return
     setBusy(true); setError('')
-    try {
-      const data = new FormData(); data.append('file', file)
-      const res = await fetch('/api/files', { method: 'POST', credentials: 'same-origin', body: data })
-      if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.detail || `Upload failed (${res.status})`) }
-      onChange(await res.json())
-    } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
+    try { onChange([...items, ...await Promise.all(Array.from(files, uploadFile))]) }
+    catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
-  return <div className="space-y-2"><input className="input" type="file" required={required && !item} disabled={busy} onChange={e => upload(e.target.files?.[0])}/>{busy && <p className="text-xs text-[#718292]">Uploading…</p>}{item && <a className="text-sm font-semibold text-accent underline" href={item.access_url} target="_blank" rel="noreferrer">{item.name ?? 'Open uploaded file'}</a>}{error && <p className="text-xs text-red-600">{error}</p>}</div>
+  return <div className="space-y-2"><input className="input" type="file" multiple required={required && !items.length} disabled={busy} onChange={e => { void upload(e.target.files); e.currentTarget.value = '' }}/>{busy && <p className="text-xs text-[#718292]">Uploading…</p>}<FilePreviewList value={items} onRemove={index => onChange(items.filter((_, i) => i !== index))}/>{error && <p className="text-xs text-red-600">{error}</p>}</div>
 }
 
 export function TicketTimeline({ ticket, steps, fields, identifierLabel }: { ticket: Ticket; steps: Step[]; fields: Field[]; identifierLabel: string }) {
@@ -316,7 +530,7 @@ export function TicketTimeline({ ticket, steps, fields, identifierLabel }: { tic
       const last = index === (ticket.events?.length ?? 0) - 1
       return <div key={event.id} className="relative pb-6 pl-7 last:pb-0">
         <div className={`absolute -left-[13px] top-0 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white shadow-sm ${last ? 'bg-accent text-white' : movement ? 'bg-[#b7e4d9] text-[#146d68]' : 'bg-[#eaf0f1] text-[#6d8490]'}`}>
-          {event.kind === 'closed' ? <CheckCircle2 size={13}/> : <span className="text-[10px] font-extrabold">{movement ? ticket.events!.slice(0, index + 1).filter(e => e.kind === 'created' || e.kind === 'moved').length : '•'}</span>}
+          {event.kind.startsWith('closed') ? <CheckCircle2 size={13}/> : <span className="text-[10px] font-extrabold">{movement ? ticket.events!.slice(0, index + 1).filter(e => e.kind === 'created' || e.kind === 'moved').length : '•'}</span>}
         </div>
         <div className={`rounded-xl border p-4 ${last ? 'border-[#a6d8cd] bg-[#f2faf7]' : 'border-[#e5ebee] bg-white'}`}>
           <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -327,7 +541,12 @@ export function TicketTimeline({ ticket, steps, fields, identifierLabel }: { tic
           </div>
           <p className="mt-2 text-xs text-[#8496a0]">{date(event.created_at)} · {event.actor_name ?? `User #${event.actor_id}`}</p>
           {event.identifier !== null && <p className="mt-2 text-xs text-[#5d7180]">{identifierLabel}: <b>{event.identifier}</b>{event.title && event.title !== event.identifier ? ` · Title: ${event.title}` : ''}</p>}
-          {Object.keys(event.snapshot).length > 0 && <div className="mt-2 text-xs text-[#718292]">Fields: {Object.entries(event.snapshot).map(([key, value]) => `${fields.find(f => f.id === Number(key))?.name ?? event.snapshot_fields?.[key] ?? key}: ${displayFieldValue(value)}`).join(' · ')}</div>}
+          {event.problem && <p className="mt-1 text-xs text-[#5d7180]">Issue: <b>{event.problem.name}</b>{event.problem.status_at_event ? ` · ${issueStatusLabel(event.problem.status_at_event)}` : ''}</p>}
+          {Object.keys(event.snapshot).length > 0 && <div className="mt-2 text-xs text-[#718292]">Fields: {Object.entries(event.snapshot).map(([key, value]) => {
+            const problem = event.snapshot_problems?.[key]
+            const label = fields.find(f => f.id === Number(key))?.name ?? event.snapshot_fields?.[key] ?? key
+            return `${label}: ${problem ? `${problem.name} (${issueStatusLabel(problem.status)})` : displayFieldValue(value)}`
+          }).join(' · ')}</div>}
         </div>
       </div>
     })}

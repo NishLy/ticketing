@@ -1,12 +1,14 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Activity, ArrowDownRight, ArrowUpRight, Building2, Clock3, Ticket, Users } from 'lucide-react'
 import {
-  Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 
 type Range = 7 | 30 | 90
 type EventPoint = { date: string; created: number; closed: number; reopened: number; moved: number }
 type GrowthPoint = { date: string; new_tenants: number; new_users: number }
+type ProblemStatus = 'identified' | 'progress_fixing' | 'fixed' | 'recurring'
+type ProblemPage = { items: { status: ProblemStatus }[]; total: number }
 type TenantMetrics = {
   range: { days: number; start: string; end: string }
   metrics: { open_tickets: number; closed_tickets: number; created_tickets: number; previous_period_created: number }
@@ -134,6 +136,36 @@ function CheckIcon() { return <Activity size={18}/> }
 export function TenantOverview() {
   const [days, setDays] = useState<Range>(30)
   const { data, loading, error } = useAnalytics<TenantMetrics>('analytics/tenant', days)
+  const [problemCounts, setProblemCounts] = useState<{ status: string; label: string; count: number; color: string }[] | null>(null)
+  const [problemError, setProblemError] = useState('')
+  useEffect(() => {
+    let live = true
+    async function loadProblems() {
+      try {
+        const counts: Record<ProblemStatus, number> = { identified: 0, progress_fixing: 0, fixed: 0, recurring: 0 }
+        let total = 0
+        for (let offset = 0; ; offset += 100) {
+          const response = await fetch(`/api/issues?limit=100&offset=${offset}`, { credentials: 'same-origin' })
+          if (!response.ok) throw new Error('Could not load issue status counts')
+          const page: ProblemPage = await response.json()
+          page.items.forEach(problem => { counts[problem.status]++ })
+          total = page.total
+          if (offset + page.items.length >= total || !page.items.length) break
+        }
+        if (live) {
+          setProblemCounts([
+            { status: 'identified', label: 'New', count: counts.identified, color: chartColors.blue },
+            { status: 'progress_fixing', label: 'In progress / fixing', count: counts.progress_fixing, color: chartColors.amber },
+            { status: 'fixed', label: 'Fixed', count: counts.fixed, color: chartColors.green },
+            { status: 'recurring', label: 'Recurring', count: counts.recurring, color: '#be7770' },
+          ])
+          setProblemError('')
+        }
+      } catch (e) { if (live) setProblemError(e instanceof Error ? e.message : 'Could not load issue status counts') }
+    }
+    void loadProblems()
+    return () => { live = false }
+  }, [])
   const metrics = data?.metrics
   return <>
     <PanelHeading eyebrow="WORKSPACE OVERVIEW" title="Keep work moving." subtitle="Ticket activity and current workload in your workspace." range={days} setRange={setDays}/>
@@ -159,6 +191,13 @@ export function TenantOverview() {
         {loading || error ? <ChartLoading loading={loading} error={error}/> : data?.tickets_by_step.length ? <ResponsiveContainer width="100%" height={270}><BarChart data={data.tickets_by_step} layout="vertical" margin={{ top: 0, right: 12, bottom: 0, left: 8 }}>
           <CartesianGrid stroke="#edf1f2" horizontal={false}/><XAxis type="number" allowDecimals={false} tickLine={false} axisLine={false} tick={{ fill: '#8b9aa3', fontSize: 11 }}/><YAxis type="category" dataKey="step_name" width={125} tickLine={false} axisLine={false} tick={{ fill: '#718292', fontSize: 10 }}/><Tooltip contentStyle={TooltipStyle()}/><Bar dataKey="tickets" name="Tickets" fill={chartColors.green} radius={[0, 6, 6, 0]} barSize={18}/>
         </BarChart></ResponsiveContainer> : <div className="flex h-[270px] items-center justify-center text-sm text-[#91a0a9]">No workflow steps yet.</div>}
+      </ChartCard>
+    </div>
+    <div className="mt-5">
+          <ChartCard title="Issues by status" subtitle="Current count of issues in each resolution status">
+        {problemError ? <ChartLoading loading={false} error={problemError}/> : !problemCounts ? <ChartLoading loading error=""/> : <ResponsiveContainer width="100%" height={270}><BarChart data={problemCounts} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
+          <CartesianGrid stroke="#edf1f2" vertical={false}/><XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: '#718292', fontSize: 11 }}/><YAxis allowDecimals={false} tickLine={false} axisLine={false} tick={{ fill: '#8b9aa3', fontSize: 11 }}/><Tooltip contentStyle={TooltipStyle()}/><Bar dataKey="count" name="Issues" radius={[6, 6, 0, 0]} barSize={42}>{problemCounts.map(issue => <Cell key={issue.status} fill={issue.color}/>)}</Bar>
+        </BarChart></ResponsiveContainer>}
       </ChartCard>
     </div>
   </>

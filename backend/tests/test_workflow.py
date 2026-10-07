@@ -30,7 +30,7 @@ def assert_ok(response):
 def test_schema_compiles_for_postgres_and_mysql():
     for dialect in (postgresql.dialect(), mysql.dialect()):
         statements = [str(CreateTable(table).compile(dialect=dialect)) for table in Base.metadata.sorted_tables]
-        assert len(statements) == 10
+        assert len(statements) == 12
         assert all("CREATE TABLE" in statement for statement in statements)
 
 
@@ -54,6 +54,37 @@ def test_migration_backfills_existing_tickets(monkeypatch, tmp_path):
         assert db.execute(text("SELECT identifier_label FROM tenants WHERE id=1")).scalar_one() == "Company name"
         assert db.execute(text("SELECT identifier FROM ticket_events WHERE id=1")).scalar_one_or_none() is None
         assert "uploaded_files" in inspect(connection).get_table_names()
+    connection.dispose()
+
+
+def test_problem_link_migration_preserves_ticket_step(monkeypatch, tmp_path):
+    legacy_url = "sqlite:///" + str(tmp_path / "problem-links.db").replace("\\", "/")
+    monkeypatch.setattr(database, "url", legacy_url)
+    config = Config("alembic.ini")
+    command.upgrade(config, "57d29b13a4ce")
+    connection = create_engine(legacy_url)
+    with connection.begin() as db:
+        timestamp = "2026-04-01 00:00:00"
+        db.execute(text("INSERT INTO tenants (id, name, slug, identifier_label, created_at, updated_at) VALUES (1, 'One', 'one', 'Company', :ts, :ts)"), {"ts": timestamp})
+        db.execute(text("INSERT INTO users (id, tenant_id, email, password_hash, role, created_at, updated_at) VALUES (1, 1, 'one@example.com', 'hash', 'tenant', :ts, :ts)"), {"ts": timestamp})
+        db.execute(text("INSERT INTO problems (id, tenant_id, name, description, status, created_at, updated_at) VALUES (1, 1, 'Known issue', 'Details', 'reappeared', :ts, :ts)"), {"ts": timestamp})
+        db.execute(text("INSERT INTO master_fields (id, tenant_id, name, key, type, options, created_at, updated_at) VALUES (1, 1, 'Problem', 'problem', 'problem', '[]', :ts, :ts)"), {"ts": timestamp})
+        db.execute(text("INSERT INTO steps (id, tenant_id, name, description, problem_id, created_at, updated_at) VALUES (1, 1, 'Legacy generated workflow', 'Keep this step as a normal workflow step', 1, :ts, :ts)"), {"ts": timestamp})
+        db.execute(text("INSERT INTO step_fields (id, tenant_id, step_id, field_id, required, position, created_at, updated_at) VALUES (1, 1, 1, 1, 1, 0, :ts, :ts)"), {"ts": timestamp})
+        db.execute(text("INSERT INTO tickets (id, tenant_id, step_id, title, identifier, title_overridden, status, created_by, created_at, updated_at) VALUES (1, 1, 1, 'Ticket', 'Company', 0, 'open', 1, :ts, :ts)"), {"ts": timestamp})
+        db.execute(text("INSERT INTO ticket_values (id, tenant_id, ticket_id, field_id, value, created_at, updated_at) VALUES (1, 1, 1, 1, '1', :ts, :ts)"), {"ts": timestamp})
+        db.execute(text("INSERT INTO ticket_problems (id, tenant_id, ticket_id, problem_id, created_at, updated_at) VALUES (1, 1, 1, 1, :ts, :ts)"), {"ts": timestamp})
+        db.execute(text("INSERT INTO ticket_events (id, tenant_id, ticket_id, actor_id, kind, to_step_id, snapshot, created_at, updated_at) VALUES (1, 1, 1, 1, 'created', 1, '{\"1\": 1}', :ts, :ts)"), {"ts": timestamp})
+    command.upgrade(config, "head")
+    with connection.connect() as db:
+        ticket = db.execute(text("SELECT problem_id, step_id FROM tickets WHERE id=1")).one()
+        assert tuple(ticket) == (1, 1)
+        assert db.execute(text("SELECT name FROM steps WHERE id=1")).scalar_one() == "Legacy generated workflow"
+        assert db.execute(text("SELECT status FROM problems WHERE id=1")).scalar_one() == "recurring"
+        assert db.execute(text("SELECT problem_status FROM ticket_events WHERE id=1")).scalar_one() == "recurring"
+        assert "problem_id" not in {column["name"] for column in inspect(connection).get_columns("steps")}
+        assert "ticket_problems" not in inspect(connection).get_table_names()
+        assert db.execute(text("SELECT deleted_at FROM ticket_values WHERE id=1")).scalar_one() is not None
     connection.dispose()
 
 
@@ -97,6 +128,61 @@ def test_tenant_workflow_and_filtered_export():
         assert a.delete("/api/workspace/icon").status_code == 200
         assert a.get("/api/workspace/icon").status_code == 404
         assert a.post("/api/workspace/icon", files={"file": ("not-an-image.png", b"invalid", "image/png")}).status_code == 422
+        problem_field = assert_ok(a.post("/api/fields", json={"name": "Problem", "key": "problem", "type": "problem"}))
+        assert a.post("/api/fields", json={"name": "Second Problem", "key": "second_problem", "type": "problem"}).status_code == 409
+        tenant_two_file = b.post("/api/files", files={"file": ("other.txt", b"other tenant", "text/plain")}).json()
+        problem_response = a.post("/api/issues", json={"name": "PIB unavailable", "description": "Customs document issue", "status": "fixed", "file_ids": [file_info["file_id"]]})
+        assert problem_response.status_code == 201, problem_response.text
+        problem = problem_response.json()
+        assert [attachment["name"] for attachment in problem["files"]] == ["proof.txt"]
+        assert a.get(problem["files"][0]["access_url"]).content == b"Acme proof"
+        assert "generated_step_id" not in problem
+        assert assert_ok(b.get("/api/issues"))["total"] == 0
+        assert a.put(f'/api/issues/{problem["id"]}', json={"name": "PIB unavailable", "description": "Customs document issue", "status": "fixed", "file_ids": [tenant_two_file["file_id"]]}).status_code == 404
+        assert b.put(f'/api/issues/{problem["id"]}', json={"name": "Foreign", "status": "identified"}).status_code == 404
+        assert a.put(f'/api/issues/{problem["id"]}', json={"name": "Invalid", "status": "recurring"}).status_code == 422
+        problem_intake = assert_ok(a.post("/api/steps", json={"name": "Problem intake", "fields": [{"field_id": problem_field["id"], "required": True}]}))
+        problem_review = assert_ok(a.post("/api/steps", json={"name": "Problem review", "fields": []}))
+        assert a.post("/api/steps", json={"name": "Duplicate problem field", "fields": [{"field_id": problem_field["id"]}, {"field_id": problem_field["id"]}]}).status_code == 422
+        linked_closed = assert_ok(a.post("/api/tickets", json={"identifier": "Problem closed ticket", "step_id": problem_intake["id"], "values": {str(problem_field["id"]): problem["id"]}}))
+        assert linked_closed["step_id"] == problem_intake["id"]
+        assert linked_closed["problem"]["id"] == problem["id"]
+        assert assert_ok(a.get("/api/issues"))["items"][0]["name"] == problem["name"]
+        assert linked_closed["values"][str(problem_field["id"])]["status"] == "recurring"
+        linked_open = assert_ok(a.post("/api/tickets", json={"identifier": "Problem open ticket", "step_id": problem_intake["id"], "values": {str(problem_field["id"]): problem["id"]}}))
+        moved_problem_ticket = assert_ok(a.post(f'/api/tickets/{linked_closed["id"]}/move', json={"step_id": problem_review["id"]}))
+        assert moved_problem_ticket["step_id"] == problem_review["id"]
+        assert moved_problem_ticket["problem"]["id"] == problem["id"]
+        assert str(problem_field["id"]) not in moved_problem_ticket["values"]
+        assert_ok(a.post(f'/api/tickets/{linked_open["id"]}/move', json={"step_id": problem_review["id"]}))
+        assert_ok(a.post(f'/api/tickets/{linked_closed["id"]}/close'))
+        changed_problem = assert_ok(a.put(f'/api/issues/{problem["id"]}', json={"name": "PIB unavailable v2", "description": "Updated problem details", "status": "identified"}))
+        assert "generated_step_id" not in changed_problem
+        synced_closed = assert_ok(a.get(f'/api/tickets/{linked_closed["id"]}'))
+        synced_open = assert_ok(a.get(f'/api/tickets/{linked_open["id"]}'))
+        assert synced_closed["step_id"] == problem_review["id"] and synced_closed["status"] == "closed"
+        assert synced_open["step_id"] == problem_review["id"] and synced_open["status"] == "open"
+        assert synced_open["problem"]["name"] == "PIB unavailable v2"
+        fixed_problem = assert_ok(a.put(f'/api/issues/{problem["id"]}', json={"name": "PIB unavailable v2", "description": "Updated problem details", "status": "fixed"}))
+        assert fixed_problem["status"] == "fixed"
+        assert fixed_problem["files"][0]["file_id"] == file_info["file_id"]
+        assert a.put(f'/api/issues/{problem["id"]}', json={"name": "PIB unavailable v2", "description": "Updated problem details", "status": "recurring"}).status_code == 422
+        closed_by_problem = assert_ok(a.get(f'/api/tickets/{linked_open["id"]}'))
+        assert closed_by_problem["status"] == "closed" and closed_by_problem["closed_at"]
+        assert closed_by_problem["step_id"] == problem_review["id"]
+        assert closed_by_problem["events"][-1]["kind"] == "closed_issue_fixed"
+        assert a.post(f'/api/tickets/{linked_open["id"]}/reopen').status_code == 409
+        linked_again = assert_ok(a.post("/api/tickets", json={"identifier": "Issue recurring ticket", "step_id": problem_intake["id"], "values": {str(problem_field["id"]): problem["id"]}}))
+        assert linked_again["step_id"] == problem_intake["id"]
+        assert linked_again["values"][str(problem_field["id"])]["status"] == "recurring"
+        detached_files = assert_ok(a.put(f'/api/issues/{problem["id"]}', json={"name": "PIB unavailable v2", "description": "Updated problem details", "status": "recurring", "file_ids": []}))
+        assert detached_files["files"] == []
+        progressed_again = assert_ok(a.put(f'/api/issues/{problem["id"]}', json={"name": "PIB unavailable v2", "description": "Updated problem details", "status": "progress_fixing", "file_ids": []}))
+        assert progressed_again["status"] == "progress_fixing"
+        reopened_problem_ticket = assert_ok(a.post(f'/api/tickets/{linked_open["id"]}/reopen'))
+        assert reopened_problem_ticket["status"] == "open"
+        assert assert_ok(a.get(f'/api/tickets/{linked_closed["id"]}'))["step_id"] == problem_review["id"]
+        assert a.delete(f'/api/issues/{problem["id"]}').status_code == 409
         shared = assert_ok(a.post("/api/fields", json={"name": "Customer", "key": "customer", "type": "text"}))
         old = assert_ok(a.post("/api/fields", json={"name": "Old note", "key": "old_note", "type": "text"}))
         new = assert_ok(a.post("/api/fields", json={"name": "Approval", "key": "approval", "type": "boolean"}))
@@ -165,8 +251,8 @@ def test_tenant_workflow_and_filtered_export():
         assert "api_key=" in exported_file_link
         analytics = assert_ok(a.get("/api/analytics/tenant", params={"days": 7}))
         assert analytics["range"]["days"] == 7 and len(analytics["events"]) == 7
-        assert analytics["metrics"]["created_tickets"] == 3
-        assert {row["step_name"] for row in analytics["tickets_by_step"]} == {"Intake", "Review"}
+        assert analytics["metrics"]["created_tickets"] == 6
+        assert {"Intake", "Review", "Problem intake", "Problem review"} <= {row["step_name"] for row in analytics["tickets_by_step"]}
         assert assert_ok(b.get("/api/analytics/tenant", params={"days": 7}))["metrics"]["created_tickets"] == 0
         assert a.get("/api/admin/analytics", params={"days": 7}).status_code == 403
         assert_ok(a.delete(f'/api/tickets/{intake["id"]}'))

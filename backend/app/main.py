@@ -20,8 +20,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .auth import check_password, create_token, decrypt_api_key, encrypt_api_key, generate_key, hash_password, key_digest, verify_token
-from .db import (BootstrapKey, MasterField, SessionLocal, Step, StepField,
-                 Tenant, Ticket, TicketEvent, TicketValue, UploadedFile, User, now)
+from .db import (BootstrapKey, MasterField, Problem, ProblemFile, SessionLocal, Step, StepField,
+                 Tenant, Ticket, TicketEvent, TicketValue,
+                 UploadedFile, User, now)
 
 app = FastAPI(title="Ticketing API")
 
@@ -111,8 +112,9 @@ def event_trends(db: Session, start: date_type, days: int, tenant_id: int | None
     counters = {(start + timedelta(days=i)).isoformat(): {kind: 0 for kind in kinds} for i in range(days)}
     for day, kind, count in rows:
         day_key = day.isoformat() if hasattr(day, "isoformat") else str(day)
-        if day_key in counters and kind in kinds:
-            counters[day_key][kind] = count
+        normalized_kind = "closed" if kind in {"closed_problem_fixed", "closed_issue_fixed"} else kind
+        if day_key in counters and normalized_kind in kinds:
+            counters[day_key][normalized_kind] += count
     return [{"date": day, **counters[day]} for day in counters]
 
 
@@ -176,7 +178,7 @@ class UserInput(Credentials):
 class FieldInput(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     key: str = Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=80)
-    type: Literal["text", "number", "date", "boolean", "select", "array", "file"]
+    type: Literal["text", "number", "date", "boolean", "select", "array", "file", "problem"]
     options: list[str] = []
 
 
@@ -215,6 +217,13 @@ class IdentityInput(BaseModel):
 class WorkspaceInput(BaseModel):
     identifier_label: str = Field(min_length=1, max_length=80)
     workspace_name: str | None = Field(default=None, max_length=120)
+
+
+class ProblemInput(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    description: str = Field(default="", max_length=4000)
+    status: Literal["identified", "progress_fixing", "fixed", "recurring"] = "identified"
+    file_ids: list[int] | None = None
 
 
 def require_password(value):
@@ -532,6 +541,126 @@ def field_data(item):
     return {**base(item), "name": item.name, "key": item.key, "type": item.type, "options": json.loads(item.options)}
 
 
+def problem_data(db: Session, item):
+    tenant = active(db, Tenant, item.tenant_id)
+    links = db.scalars(select(ProblemFile).where(
+        ProblemFile.problem_id == item.id, ProblemFile.deleted_at.is_(None)).order_by(ProblemFile.position, ProblemFile.id)).all()
+    files = []
+    for link in links:
+        uploaded = db.scalar(select(UploadedFile).where(
+            UploadedFile.id == link.uploaded_file_id, UploadedFile.tenant_id == item.tenant_id,
+            UploadedFile.deleted_at.is_(None)))
+        if uploaded:
+            files.append(file_data(uploaded, tenant))
+    return {**base(item), "name": item.name, "description": item.description,
+            "status": item.status, "files": files}
+
+
+def set_problem_files(db: Session, problem: Problem, file_ids: list[int], tenant_id: int):
+    if len(file_ids) != len(set(file_ids)):
+        raise HTTPException(422, "A file may only be attached once to an Issue")
+    if len(file_ids) > 20:
+        raise HTTPException(422, "An Issue can have at most 20 attachments")
+    uploaded = {}
+    if file_ids:
+        uploaded = {file.id: file for file in db.scalars(select(UploadedFile).where(
+            UploadedFile.id.in_(file_ids), UploadedFile.tenant_id == tenant_id,
+            UploadedFile.deleted_at.is_(None)))}
+        if set(uploaded) != set(file_ids):
+            raise HTTPException(404, "One or more files were not found in this tenant")
+    old_links = db.scalars(select(ProblemFile).where(
+        ProblemFile.problem_id == problem.id, ProblemFile.deleted_at.is_(None))).all()
+    existing = {link.uploaded_file_id: link for link in old_links}
+    for link in old_links:
+        if link.uploaded_file_id not in file_ids:
+            link.deleted_at = now()
+    for position, file_id in enumerate(file_ids):
+        if file_id in existing:
+            existing[file_id].position = position
+        else:
+            db.add(ProblemFile(tenant_id=tenant_id, problem_id=problem.id,
+                               uploaded_file_id=file_id, position=position))
+
+
+def problem_field_for(db: Session, tenant_id: int):
+    return db.scalar(select(MasterField).where(
+        MasterField.tenant_id == tenant_id, MasterField.type == "problem", MasterField.deleted_at.is_(None)))
+
+
+@app.get("/api/problems", include_in_schema=False)
+@app.get("/api/issues")
+def problems(p: Paging = Depends(), db: Session = Depends(session), user: User = Depends(member)):
+    rows, count = page(db, Problem, [Problem.tenant_id == user.tenant_id, Problem.deleted_at.is_(None)], p.limit, p.offset)
+    return {"items": [problem_data(db, row) for row in rows], "total": count}
+
+
+@app.post("/api/problems", status_code=201, include_in_schema=False)
+@app.post("/api/issues", status_code=201)
+def create_problem(body: ProblemInput, db: Session = Depends(session), user: User = Depends(member)):
+    if body.status == "recurring":
+        raise HTTPException(422, "Recurring is assigned automatically when a Fixed Issue is selected on a ticket")
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(422, "Issue name is required")
+    item = db.scalar(select(Problem).where(Problem.tenant_id == user.tenant_id, Problem.name == name))
+    if item is None:
+        item = Problem(tenant_id=user.tenant_id, name=name, description=body.description.strip(), status=body.status)
+        db.add(item)
+    else:
+        item.deleted_at = None
+        item.description, item.status = body.description.strip(), body.status
+    try:
+        db.flush()
+        if body.file_ids is not None:
+            set_problem_files(db, item, body.file_ids, user.tenant_id)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Issue name already exists")
+    return problem_data(db, item)
+
+
+@app.put("/api/problems/{item_id}", include_in_schema=False)
+@app.put("/api/issues/{item_id}")
+def update_problem(item_id: int, body: ProblemInput, db: Session = Depends(session), user: User = Depends(member)):
+    item = active(db, Problem, item_id, user.tenant_id)
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(422, "Issue name is required")
+    if body.status == "recurring" and item.status != "recurring":
+        raise HTTPException(422, "Recurring is assigned automatically when a Fixed Issue is selected on a ticket")
+    item.name, item.description, item.status, item.updated_at = name, body.description.strip(), body.status, now()
+    try:
+        if body.file_ids is not None:
+            set_problem_files(db, item, body.file_ids, user.tenant_id)
+        if body.status == "fixed":
+            linked_tickets = db.scalars(select(Ticket).where(
+                Ticket.tenant_id == user.tenant_id, Ticket.problem_id == item.id,
+                Ticket.deleted_at.is_(None), Ticket.status == "open")).all()
+            for ticket in linked_tickets:
+                ticket.status, ticket.closed_at, ticket.updated_at = "closed", now(), now()
+                event(db, ticket, user, "closed_issue_fixed", ticket.step_id, current_ticket_values(db, ticket))
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Issue name already exists")
+    return problem_data(db, item)
+
+
+@app.delete("/api/problems/{item_id}", include_in_schema=False)
+@app.delete("/api/issues/{item_id}")
+def delete_problem(item_id: int, db: Session = Depends(session), user: User = Depends(member)):
+    item = active(db, Problem, item_id, user.tenant_id)
+    if db.scalar(select(Ticket.id).where(Ticket.problem_id == item.id, Ticket.deleted_at.is_(None))):
+        raise HTTPException(409, "Issue is attached to tickets")
+    item.deleted_at = now()
+    for link in db.scalars(select(ProblemFile).where(
+            ProblemFile.problem_id == item.id, ProblemFile.deleted_at.is_(None))):
+        link.deleted_at = now()
+    db.commit()
+    return {"ok": True}
+
+
 @app.get("/api/fields")
 def fields(p: Paging = Depends(), db: Session = Depends(session), user: User = Depends(member)):
     rows, count = page(db, MasterField, [MasterField.tenant_id == user.tenant_id, MasterField.deleted_at.is_(None)], p.limit, p.offset)
@@ -550,8 +679,11 @@ def create_field(body: FieldInput, db: Session = Depends(session), user: User = 
     validate_field_input(body)
     if db.scalar(select(MasterField.id).where(MasterField.tenant_id == user.tenant_id, MasterField.key == body.key)):
         raise HTTPException(409, "Field key already exists")
+    if body.type == "problem" and problem_field_for(db, user.tenant_id):
+        raise HTTPException(409, "This tenant already has an Issue field; reuse that field on workflow steps")
     item = MasterField(tenant_id=user.tenant_id, name=body.name, key=body.key, type=body.type, options=json.dumps(body.options))
     db.add(item)
+    db.flush()
     db.commit()
     return field_data(item)
 
@@ -629,6 +761,9 @@ def update_field(item_id: int, body: FieldInput, db: Session = Depends(session),
 @app.delete("/api/fields/{item_id}")
 def delete_field(item_id: int, db: Session = Depends(session), user: User = Depends(member)):
     item = active(db, MasterField, item_id, user.tenant_id)
+    if item.type == "problem" and db.scalar(select(Problem.id).where(
+            Problem.tenant_id == user.tenant_id, Problem.deleted_at.is_(None))):
+        raise HTTPException(409, "Delete or archive Issue records before removing the Issue field")
     if db.scalar(select(StepField.id).where(StepField.field_id == item_id, StepField.deleted_at.is_(None))):
         raise HTTPException(409, "Remove this field from steps first")
     item.deleted_at = now()
@@ -654,6 +789,11 @@ def set_step_fields(db, item, bindings, tenant_id):
         raise HTTPException(422, "A field may appear only once in a step")
     for field_id in ids:
         active(db, MasterField, field_id, tenant_id)
+    problem_fields = db.scalars(select(MasterField).where(
+        MasterField.id.in_(ids or [-1]), MasterField.tenant_id == tenant_id,
+        MasterField.type == "problem", MasterField.deleted_at.is_(None))).all()
+    if len(problem_fields) > 1:
+        raise HTTPException(422, "A workflow step may contain at most one Issue field")
     for old in db.scalars(select(StepField).where(StepField.step_id == item.id, StepField.deleted_at.is_(None))):
         old.deleted_at = now()
     for position, binding in enumerate(bindings):
@@ -717,7 +857,8 @@ def validated_values(db, step_id, tenant_id, values):
                  "boolean": lambda: isinstance(value, bool),
                  "select": lambda: isinstance(value, str) and value in json.loads(field.options),
                  "array": lambda: isinstance(value, list) and all(isinstance(v, str) for v in value),
-                 "file": lambda: isinstance(value, dict) and isinstance(value.get("file_id"), int) and db.scalar(select(UploadedFile.id).where(UploadedFile.id == value["file_id"], UploadedFile.tenant_id == tenant_id, UploadedFile.deleted_at.is_(None))) is not None}[field.type]()
+                  "file": lambda: (isinstance(value, dict) and isinstance(value.get("file_id"), int) and db.scalar(select(UploadedFile.id).where(UploadedFile.id == value["file_id"], UploadedFile.tenant_id == tenant_id, UploadedFile.deleted_at.is_(None))) is not None) or (isinstance(value, list) and all(isinstance(v, dict) and isinstance(v.get("file_id"), int) and db.scalar(select(UploadedFile.id).where(UploadedFile.id == v["file_id"], UploadedFile.tenant_id == tenant_id, UploadedFile.deleted_at.is_(None))) is not None for v in value)),
+                  "problem": lambda: type(value) is int and db.scalar(select(Problem.id).where(Problem.id == value, Problem.tenant_id == tenant_id, Problem.deleted_at.is_(None))) is not None}[field.type]()
         if not valid:
             raise HTTPException(422, f"Invalid value for {field.name}")
         if field.type == "date":
@@ -726,30 +867,70 @@ def validated_values(db, step_id, tenant_id, values):
             except ValueError:
                 raise HTTPException(422, f"Invalid date for {field.name}")
         if field.type == "file" and value not in (None, ""):
-            file_record = db.scalar(select(UploadedFile).where(UploadedFile.id == value["file_id"],
-                UploadedFile.tenant_id == tenant_id, UploadedFile.deleted_at.is_(None)))
-            if file_record is None:
-                raise HTTPException(422, f"File for {field.name} is unavailable to this tenant")
-            values[key] = {"file_id": file_record.id, "name": file_record.original_name,
-                           "size": file_record.size, "content_type": file_record.content_type}
+            file_items = value if isinstance(value, list) else [value]
+            normalized = []
+            for file_value in file_items:
+                file_record = db.scalar(select(UploadedFile).where(UploadedFile.id == file_value["file_id"],
+                    UploadedFile.tenant_id == tenant_id, UploadedFile.deleted_at.is_(None)))
+                if file_record is None:
+                    raise HTTPException(422, f"File for {field.name} is unavailable to this tenant")
+                normalized.append({"file_id": file_record.id, "name": file_record.original_name,
+                                   "size": file_record.size, "content_type": file_record.content_type})
+            values[key] = normalized if isinstance(value, list) else normalized[0]
     for key, binding in allowed.items():
         if binding.required and (values.get(key) in (None, "") or values.get(key) == []):
             raise HTTPException(422, f"Required field {key} is missing")
     return values
 
 
+def handle_problem_selection(db: Session, ticket: Ticket, values: dict[str, Any], actor: User, *, field_is_present: bool):
+    tenant_id = ticket.tenant_id
+    field = problem_field_for(db, tenant_id)
+    if not field or not field_is_present:
+        return
+    key = str(field.id)
+    if key not in values:
+        return
+    selected_id = values[key]
+    if selected_id in (None, ""):
+        ticket.problem_id = None
+        return
+    if type(selected_id) is not int:
+        raise HTTPException(422, "Choose a valid Issue")
+    problem = active(db, Problem, selected_id, tenant_id)
+    if selected_id != ticket.problem_id and problem.status == "fixed":
+        problem.status = "recurring"
+        problem.updated_at = now()
+    ticket.problem_id = problem.id
+
+
+def current_ticket_values(db: Session, ticket: Ticket):
+    values = values_for(db, ticket.id)
+    problem_field = problem_field_for(db, ticket.tenant_id)
+    if problem_field and ticket.problem_id is not None and any(
+            binding.field_id == problem_field.id for binding in bindings_for(db, ticket.step_id)):
+        values[str(problem_field.id)] = ticket.problem_id
+    return values
+
+
 def replace_values(db, ticket, values):
+    problem_field = problem_field_for(db, ticket.tenant_id)
     for old in db.scalars(select(TicketValue).where(TicketValue.ticket_id == ticket.id, TicketValue.deleted_at.is_(None))):
         old.deleted_at = now()
     for key, value in values.items():
+        if problem_field and key == str(problem_field.id):
+            continue
         if value is not None and value != "":
             db.add(TicketValue(tenant_id=ticket.tenant_id, ticket_id=ticket.id, field_id=int(key), value=json.dumps(value)))
 
 
 def event(db, ticket, user, kind, previous, values):
+    problem = db.scalar(select(Problem).where(
+        Problem.id == ticket.problem_id, Problem.tenant_id == ticket.tenant_id)) if ticket.problem_id else None
     db.add(TicketEvent(tenant_id=ticket.tenant_id, ticket_id=ticket.id, actor_id=user.id, kind=kind,
                        from_step_id=previous, to_step_id=ticket.step_id, snapshot=json.dumps(values),
-                       identifier=ticket.identifier, title=ticket.title))
+                       identifier=ticket.identifier, title=ticket.title,
+                       problem_id=ticket.problem_id, problem_status=problem.status if problem else None))
 
 
 def identity(identifier: str, title: str | None):
@@ -762,32 +943,59 @@ def identity(identifier: str, title: str | None):
     return identifier, title or identifier, bool(title and title != identifier)
 
 
-def ticket_data(item):
+def ticket_data(item, attached_problem=None):
     return {**base(item), "title": item.title, "identifier": item.identifier,
             "title_overridden": item.title_overridden, "step_id": item.step_id, "status": item.status,
-            "closed_at": iso(item.closed_at), "created_by": item.created_by}
+            "closed_at": iso(item.closed_at), "created_by": item.created_by,
+            "problem": attached_problem}
+
+
+def problem_summary(db: Session, tenant_id: int, problem_id: int | None):
+    if problem_id is None:
+        return None
+    problem = db.scalar(select(Problem).where(Problem.id == problem_id, Problem.tenant_id == tenant_id))
+    return {"id": problem.id, "name": problem.name, "description": problem.description, "status": problem.status} if problem else None
 
 
 def ticket_detail(db, item):
-    values = values_for(db, item.id)
-    file_values = {int(key): value for key, value in values.items() if isinstance(value, dict) and "file_id" in value}
+    values = current_ticket_values(db, item)
+    file_values = {int(key): value for key, value in values.items() if (isinstance(value, dict) and "file_id" in value) or (isinstance(value, list) and value and all(isinstance(v, dict) and "file_id" in v for v in value))}
     if file_values:
         tenant = active(db, Tenant, item.tenant_id)
         for key, value in file_values.items():
-            uploaded = db.scalar(select(UploadedFile).where(UploadedFile.id == value["file_id"],
-                UploadedFile.tenant_id == item.tenant_id, UploadedFile.deleted_at.is_(None)))
-            if uploaded:
-                values[str(key)] = file_data(uploaded, tenant)
+            file_items = value if isinstance(value, list) else [value]
+            expanded = []
+            for file_value in file_items:
+                uploaded = db.scalar(select(UploadedFile).where(UploadedFile.id == file_value["file_id"],
+                    UploadedFile.tenant_id == item.tenant_id, UploadedFile.deleted_at.is_(None)))
+                if uploaded:
+                    expanded.append(file_data(uploaded, tenant))
+            values[str(key)] = expanded if isinstance(value, list) else (expanded[0] if expanded else value)
+    problem_field = problem_field_for(db, item.tenant_id)
+    if problem_field and str(problem_field.id) in values and type(values[str(problem_field.id)]) is int:
+        selected_problem = db.scalar(select(Problem).where(
+            Problem.id == values[str(problem_field.id)], Problem.tenant_id == item.tenant_id))
+        if selected_problem:
+            values[str(problem_field.id)] = {"problem_id": selected_problem.id, "name": selected_problem.name,
+                                             "description": selected_problem.description, "status": selected_problem.status}
     event_steps = {s.id: s.name for s in db.scalars(select(Step).where(Step.tenant_id == item.tenant_id))}
     event_fields = {f.id: f.name for f in db.scalars(select(MasterField).where(MasterField.tenant_id == item.tenant_id))}
+    event_problems = {problem.id: {"id": problem.id, "name": problem.name, "description": problem.description,
+                                   "status": problem.status} for problem in db.scalars(
+        select(Problem).where(Problem.tenant_id == item.tenant_id))}
     event_actors = {actor.id: actor.email for actor in db.scalars(select(User).where(User.tenant_id == item.tenant_id))}
-    return {**ticket_data(item), "values": values, "events": [
+    return {**ticket_data(item, problem_summary(db, item.tenant_id, item.problem_id)), "values": values, "events": [
         {**base(e), "actor_id": e.actor_id, "kind": e.kind, "from_step_id": e.from_step_id,
          "to_step_id": e.to_step_id, "snapshot": json.loads(e.snapshot),
          "identifier": e.identifier, "title": e.title,
          "actor_name": event_actors.get(e.actor_id),
+         "problem": {**event_problems[e.problem_id], "status_at_event": e.problem_status}
+                    if e.problem_id in event_problems else None,
          "from_step_name": event_steps.get(e.from_step_id), "to_step_name": event_steps.get(e.to_step_id),
-         "snapshot_fields": {str(field_id): event_fields[int(field_id)] for field_id in json.loads(e.snapshot) if int(field_id) in event_fields}}
+         "snapshot_fields": {str(field_id): event_fields[int(field_id)] for field_id in json.loads(e.snapshot) if int(field_id) in event_fields},
+         "snapshot_problems": {str(field_id): event_problems[problem_id] for field_id, problem_id in json.loads(e.snapshot).items()
+                                if int(field_id) in event_fields and problem_field and int(field_id) == problem_field.id
+                                and type(problem_id) is int and problem_id in event_problems}}
         for e in db.scalars(select(TicketEvent).where(TicketEvent.ticket_id == item.id).order_by(TicketEvent.created_at, TicketEvent.id))]}
 
 
@@ -807,7 +1015,10 @@ def tickets(step_ids: list[int] = Query(default=[]), status: Literal["open", "cl
             search: str = Query(default="", max_length=200), p: Paging = Depends(),
             db: Session = Depends(session), user: User = Depends(member)):
     rows, count = page(db, Ticket, ticket_conditions(user.tenant_id, step_ids, status, search.strip()), p.limit, p.offset)
-    return {"items": [ticket_data(r) for r in rows], "total": count}
+    problem_ids = {row.problem_id for row in rows if row.problem_id is not None}
+    problem_names = {problem.id: problem_summary(db, user.tenant_id, problem.id) for problem in
+                     db.scalars(select(Problem).where(Problem.tenant_id == user.tenant_id, Problem.id.in_(problem_ids or [-1])))}
+    return {"items": [ticket_data(row, problem_names.get(row.problem_id)) for row in rows], "total": count}
 
 
 @app.get("/api/tickets/export")
@@ -818,8 +1029,11 @@ def export_tickets(request: Request, step_ids: list[int] = Query(default=[]), st
     tenant = active(db, Tenant, user.tenant_id)
     identifier_label = tenant.identifier_label
     step_names = {s.id: s.name for s in db.scalars(select(Step).where(Step.tenant_id == user.tenant_id))}
-    field_names = {f.id: f.name for f in db.scalars(select(MasterField).where(MasterField.tenant_id == user.tenant_id))}
-    field_ids = sorted({int(key) for row in rows for key in values_for(db, row.id)})
+    master_fields = db.scalars(select(MasterField).where(MasterField.tenant_id == user.tenant_id)).all()
+    field_names = {f.id: f.name for f in master_fields}
+    field_types = {f.id: f.type for f in master_fields}
+    field_ids = sorted({int(key) for row in rows for key in values_for(db, row.id)
+                        if field_types.get(int(key)) != "problem"})
     book = Workbook()
     sheet = book.active
     sheet.title = "Tickets"
@@ -827,14 +1041,20 @@ def export_tickets(request: Request, step_ids: list[int] = Query(default=[]), st
         text = str(value)
         return "'" + text if text.startswith(("=", "+", "-", "@")) else text
 
-    sheet.append(["ID", safe(identifier_label), "Title", "Step", "Status", "Created at", "Updated at", "Closed at"] + [safe(field_names.get(i, str(i))) for i in field_ids])
+    sheet.append(["ID", safe(identifier_label), "Title", "Issue", "Step", "Status", "Created at", "Updated at", "Closed at"] + [safe(field_names.get(i, str(i))) for i in field_ids])
     for row in rows:
         values = values_for(db, row.id)
-        def export_value(value):
+        def export_value(field_id, value):
             if isinstance(value, list):
                 return ", ".join(map(str, value))
+            if field_types.get(field_id) == "problem" and type(value) is int:
+                problem = db.scalar(select(Problem).where(Problem.id == value, Problem.tenant_id == user.tenant_id))
+                return f"{problem.name} ({problem.status.replace('_', ' ')})" if problem else str(value)
             if isinstance(value, dict) and value.get("access_url"):
                 return value["access_url"]
+            if isinstance(value, dict) and value.get("problem_id"):
+                problem = db.scalar(select(Problem).where(Problem.id == value["problem_id"], Problem.tenant_id == user.tenant_id))
+                return f"{problem.name} ({problem.status.replace('_', ' ')})" if problem else str(value["problem_id"])
             if isinstance(value, dict) and value.get("file_id"):
                 uploaded = db.scalar(select(UploadedFile).where(UploadedFile.id == value["file_id"],
                     UploadedFile.tenant_id == user.tenant_id, UploadedFile.deleted_at.is_(None)))
@@ -842,8 +1062,10 @@ def export_tickets(request: Request, step_ids: list[int] = Query(default=[]), st
                     return file_access_url(uploaded, tenant, str(request.base_url))
             return value
 
-        sheet.append([row.id, safe(row.identifier), safe(row.title), safe(step_names.get(row.step_id, "")), row.status, iso(row.created_at), iso(row.updated_at), iso(row.closed_at)] +
-                     [safe(export_value(values.get(str(i), ""))) for i in field_ids])
+        current_problem = problem_summary(db, user.tenant_id, row.problem_id)
+        problem_label = f"{current_problem['name']} ({current_problem['status'].replace('_', ' ')})" if current_problem else ""
+        sheet.append([row.id, safe(row.identifier), safe(row.title), safe(problem_label), safe(step_names.get(row.step_id, "")), row.status, iso(row.created_at), iso(row.updated_at), iso(row.closed_at)] +
+                     [safe(export_value(i, values.get(str(i), ""))) for i in field_ids])
     buffer = io.BytesIO()
     book.save(buffer)
     buffer.seek(0)
@@ -855,13 +1077,17 @@ def export_tickets(request: Request, step_ids: list[int] = Query(default=[]), st
 def create_ticket(body: TicketInput, db: Session = Depends(session), user: User = Depends(member)):
     active(db, Step, body.step_id, user.tenant_id)
     values = validated_values(db, body.step_id, user.tenant_id, body.values)
+    source_values = dict(values)
     identifier, title, overridden = identity(body.identifier, body.title)
     item = Ticket(tenant_id=user.tenant_id, step_id=body.step_id, identifier=identifier,
                   title=title, title_overridden=overridden, created_by=user.id)
+    problem_field = problem_field_for(db, user.tenant_id)
+    handle_problem_selection(db, item, values, user,
+        field_is_present=bool(problem_field and str(problem_field.id) in {str(b.field_id) for b in bindings_for(db, body.step_id)}))
     db.add(item)
     db.flush()
     replace_values(db, item, values)
-    event(db, item, user, "created", None, values)
+    event(db, item, user, "created", None, source_values)
     db.commit()
     return ticket_detail(db, item)
 
@@ -876,10 +1102,14 @@ def edit_ticket(item_id: int, body: ValuesInput, db: Session = Depends(session),
     item = active(db, Ticket, item_id, user.tenant_id)
     if item.status != "open":
         raise HTTPException(409, "Ticket is closed")
+    previous_step_id = item.step_id
     values = validated_values(db, item.step_id, user.tenant_id, body.values)
+    problem_field = problem_field_for(db, user.tenant_id)
+    handle_problem_selection(db, item, values, user,
+        field_is_present=bool(problem_field and str(problem_field.id) in {str(b.field_id) for b in bindings_for(db, item.step_id)}))
     replace_values(db, item, values)
     item.updated_at = now()
-    event(db, item, user, "edited", item.step_id, values)
+    event(db, item, user, "moved" if item.step_id != previous_step_id else "edited", previous_step_id, values)
     db.commit()
     return ticket_detail(db, item)
 
@@ -894,7 +1124,7 @@ def update_identity(item_id: int, body: IdentityInput, db: Session = Depends(ses
     if (item.identifier, item.title, item.title_overridden) != (identifier, title, overridden):
         item.identifier, item.title, item.title_overridden = identifier, title, overridden
         item.updated_at = now()
-        event(db, item, user, "identity_updated", item.step_id, values_for(db, item.id))
+        event(db, item, user, "identity_updated", item.step_id, current_ticket_values(db, item))
         db.commit()
     return ticket_detail(db, item)
 
@@ -908,8 +1138,12 @@ def move_ticket(item_id: int, body: MoveInput, db: Session = Depends(session), u
     if item.step_id == body.step_id:
         raise HTTPException(422, "Choose a different step")
     allowed = {str(b.field_id) for b in bindings_for(db, body.step_id)}
-    shared = {key: value for key, value in values_for(db, item.id).items() if key in allowed}
+    previous_values = current_ticket_values(db, item)
+    shared = {key: value for key, value in previous_values.items() if key in allowed}
     values = validated_values(db, body.step_id, user.tenant_id, {**shared, **body.values})
+    problem_field = problem_field_for(db, user.tenant_id)
+    handle_problem_selection(db, item, values, user,
+        field_is_present=bool(problem_field and str(problem_field.id) in allowed))
     previous = item.step_id
     item.step_id = body.step_id
     item.updated_at = now()
@@ -925,7 +1159,7 @@ def close_ticket(item_id: int, db: Session = Depends(session), user: User = Depe
     if item.status != "open":
         raise HTTPException(409, "Ticket is closed")
     item.status, item.closed_at, item.updated_at = "closed", now(), now()
-    event(db, item, user, "closed", item.step_id, values_for(db, item.id))
+    event(db, item, user, "closed", item.step_id, current_ticket_values(db, item))
     db.commit()
     return ticket_detail(db, item)
 
@@ -935,8 +1169,12 @@ def reopen_ticket(item_id: int, db: Session = Depends(session), user: User = Dep
     item = active(db, Ticket, item_id, user.tenant_id)
     if item.status != "closed":
         raise HTTPException(409, "Only closed tickets can be reopened")
+    if item.problem_id is not None:
+        problem = db.scalar(select(Problem).where(Problem.id == item.problem_id, Problem.tenant_id == user.tenant_id))
+        if problem and problem.status == "fixed":
+            raise HTTPException(409, "Reopen the ticket only after its Issue is no longer Fixed")
     item.status, item.closed_at, item.updated_at = "open", None, now()
-    event(db, item, user, "reopened", item.step_id, values_for(db, item.id))
+    event(db, item, user, "reopened", item.step_id, current_ticket_values(db, item))
     db.commit()
     return ticket_detail(db, item)
 
@@ -945,6 +1183,6 @@ def reopen_ticket(item_id: int, db: Session = Depends(session), user: User = Dep
 def delete_ticket(item_id: int, db: Session = Depends(session), user: User = Depends(member)):
     item = active(db, Ticket, item_id, user.tenant_id)
     item.deleted_at = now()
-    event(db, item, user, "deleted", item.step_id, values_for(db, item.id))
+    event(db, item, user, "deleted", item.step_id, current_ticket_values(db, item))
     db.commit()
     return {"ok": True}

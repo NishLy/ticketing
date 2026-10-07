@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, create_engine, event
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from dotenv import load_dotenv
 
@@ -75,6 +75,25 @@ class MasterField(Tracked, Base):
     options = Column(Text, nullable=False, default="[]")
 
 
+class Problem(Tracked, Base):
+    __tablename__ = "problems"
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_problems_tenant_name"),)
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    name = Column(String(160), nullable=False)
+    description = Column(Text, nullable=False, default="")
+    status = Column(String(24), nullable=False, default="identified")
+
+
+class ProblemFile(Tracked, Base):
+    __tablename__ = "problem_files"
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    problem_id = Column(Integer, ForeignKey("problems.id"), nullable=False, index=True)
+    uploaded_file_id = Column(Integer, ForeignKey("uploaded_files.id"), nullable=False, index=True)
+    position = Column(Integer, nullable=False, default=0)
+
+
 class Step(Tracked, Base):
     __tablename__ = "steps"
     id = Column(Integer, primary_key=True)
@@ -98,6 +117,7 @@ class Ticket(Tracked, Base):
     id = Column(Integer, primary_key=True)
     tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     step_id = Column(Integer, ForeignKey("steps.id"), nullable=False, index=True)
+    problem_id = Column(Integer, ForeignKey("problems.id"), nullable=True, index=True)
     title = Column(String(200), nullable=False)
     identifier = Column(String(200), nullable=False)
     title_overridden = Column(Boolean, nullable=False, default=False)
@@ -129,6 +149,8 @@ class TicketEvent(Tracked, Base):
     # Null on events created before identifiers were introduced.
     identifier = Column(String(200), nullable=True)
     title = Column(String(200), nullable=True)
+    problem_id = Column(Integer, ForeignKey("problems.id"), nullable=True, index=True)
+    problem_status = Column(String(24), nullable=True)
 
 
 class UploadedFile(Tracked, Base):
