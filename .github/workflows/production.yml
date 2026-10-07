@@ -27,9 +27,9 @@ jobs:
 
       - name: Copy environment file
         run: |
-          install -m 600 /envs/ticketing/.env.production .env.production
+          install -m 600 /envs/ticketing/.env.production .env
           cat .env
           echo "Environment file copied successfully."
 
       - name: Deploy selected version
-        run: make deploy DEPLOY_REF=master DEPLOY_ENV_FILE=/envs/ticketing/.env.production
+        run: make deploy DEPLOY_REF=master DEPLOY_ENV_FILE=.env
