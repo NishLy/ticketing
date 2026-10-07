@@ -1,0 +1,33 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy production
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v5
+        with:
+          ref: master
+          clean: true
+
+      - name: Copy environment file
+        run: |
+          install -m 600 /envs/ticketing/.env.production .env
+
+      - name: Deploy selected version
+        run: make deploy DEPLOY_REF=master

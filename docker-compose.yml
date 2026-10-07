@@ -1,5 +1,6 @@
 services:
   api:
+    image: ${IMAGE_PREFIX:-ticketing}/api:${IMAGE_TAG:-latest}
     build: ./backend
     environment:
       DATABASE_URL: ${DATABASE_URL:-sqlite:////data/ticketing.db}
@@ -29,6 +30,7 @@ services:
       interval: 5s
       retries: 10
   web:
+    image: ${IMAGE_PREFIX:-ticketing}/web:${IMAGE_TAG:-latest}
     build: ./frontend
     ports:
       - "${PORT:-8080}:80"
